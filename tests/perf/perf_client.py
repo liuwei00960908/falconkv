@@ -250,6 +250,7 @@ def run_benchmark(config: dict, client_id: str):
     duration_sec = test_cfg.get("duration_sec", 30)
     capacity_gb = client_cfg.get("capacity_gb", 8)
     writer_warmup_only = test_cfg.get("writer_warmup_only", False)
+    writer_hold_after_sec = test_cfg.get("writer_hold_after_sec", 0)
 
     role = _get_role(client_id, client_cfg, config)
 
@@ -469,6 +470,10 @@ def run_benchmark(config: dict, client_id: str):
     if role == "writer":
         print(f"[A] put_exec={put_exec_count}  put_skip={put_skip_count}")
     print(f"[{client_id}] get_hit={get_hit_count}  get_miss={get_miss_count}")
+
+    if role == "writer" and writer_warmup_only and writer_hold_after_sec > 0:
+        print(f"[A] Holding store alive for {writer_hold_after_sec}s ...")
+        time.sleep(writer_hold_after_sec)
 
     client.close()
     return result

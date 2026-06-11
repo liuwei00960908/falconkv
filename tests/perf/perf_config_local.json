@@ -5,8 +5,8 @@
     "value_size": 1048576,
     "warmup_sec": 5,
     "meta_listen_port": 18900,
-    "scheduler_uds_path": "/home/zhangzhaoju/Learn/code/perf_log/local/falconkv_perf_sched.sock",
-    "result_dir": "/home/zhangzhaoju/Learn/code/perf_log/local/falconkv_perf_result"
+    "scheduler_uds_path": "/tmp/falconkv_perf/local/falconkv_perf_sched.sock",
+    "result_dir": "/tmp/falconkv_perf/local/result"
   },
   "meta": {
     "shard_count": 16
@@ -21,7 +21,7 @@
       "node_id": 1,
       "store_id": 1,
       "listen_port": 18901,
-      "ssd_path": "/home/zhangzhaoju/Learn/code/perf_log/local/falconkv_perf_ssd/A",
+      "ssd_path": "/tmp/falconkv_perf/local/ssd/A",
       "capacity_gb": 50,
       "cache_capacity": 100000,
       "io_threads": 8,

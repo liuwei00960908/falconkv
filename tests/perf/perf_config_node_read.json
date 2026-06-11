@@ -5,9 +5,10 @@
     "value_size": 1048576,
     "warmup_sec": 5,
     "meta_listen_port": 18900,
-    "scheduler_uds_path": "/home/zhangzhaoju/Learn/code/perf_log/node_read/falconkv_perf_sched.sock",
-    "result_dir": "/home/zhangzhaoju/Learn/code/perf_log/node_read/falconkv_perf_result",
-    "writer_warmup_only": true
+    "scheduler_uds_path": "/tmp/falconkv_perf/node_read/falconkv_perf_sched.sock",
+    "result_dir": "/tmp/falconkv_perf/node_read/result",
+    "writer_warmup_only": true,
+    "writer_hold_after_sec": 3
   },
   "meta": {
     "shard_count": 16
@@ -22,7 +23,7 @@
       "node_id": 1,
       "store_id": 1,
       "listen_port": 18901,
-      "ssd_path": "/home/zhangzhaoju/Learn/code/perf_log/node_read/falconkv_perf_ssd/A",
+      "ssd_path": "/tmp/falconkv_perf/node_read/ssd/A",
       "capacity_gb": 50,
       "cache_capacity": 100000,
       "io_threads": 8,
@@ -40,7 +41,7 @@
       "node_id": 1,
       "store_id": 2,
       "listen_port": 18912,
-      "ssd_path": "/home/zhangzhaoju/Learn/code/perf_log/node_read/falconkv_perf_ssd/B",
+      "ssd_path": "/tmp/falconkv_perf/node_read/ssd/B",
       "capacity_gb": 50,
       "cache_capacity": 100000,
       "io_threads": 8,

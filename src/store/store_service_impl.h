@@ -23,6 +23,11 @@ public:
                    BatchReadResponse* response,
                    ::google::protobuf::Closure* done) override;
 
+    void BatchReadStream(::google::protobuf::RpcController* controller,
+                         const BatchReadStreamRequest* request,
+                         BatchReadStreamResponse* response,
+                         ::google::protobuf::Closure* done) override;
+
     void GetByKey(::google::protobuf::RpcController* controller,
                   const GetByKeyRequest* request,
                   GetByKeyResponse* response,

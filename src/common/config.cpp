@@ -114,6 +114,8 @@ void ApplyEnvOverrides(FalconKVConfig& config) {
     config.transfer.connect_timeout_ms = GetEnvOrDefaultInt("FALCONKV_CONNECT_TIMEOUT_MS", config.transfer.connect_timeout_ms);
     config.transfer.max_retry = GetEnvOrDefaultInt("FALCONKV_MAX_RETRY", config.transfer.max_retry);
     config.transfer.max_body_size_mb = GetEnvOrDefaultUInt64("FALCONKV_MAX_BODY_SIZE_MB", config.transfer.max_body_size_mb);
+    config.transfer.remote_read_stream_enabled = GetEnvOrDefault("FALCONKV_REMOTE_READ_STREAM_ENABLED", config.transfer.remote_read_stream_enabled ? "1" : "0") == "1";
+    config.transfer.remote_read_chunk_size_mb = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_CHUNK_SIZE_MB", config.transfer.remote_read_chunk_size_mb);
 }
 
 void ParseCommonConfig(const Json::Value& root, CommonConfig& cfg) {
@@ -209,6 +211,8 @@ void ParseTransferConfig(const Json::Value& root, TransferConfig& cfg) {
     if (t.isMember("connect_timeout_ms")) cfg.connect_timeout_ms = t["connect_timeout_ms"].asInt();
     if (t.isMember("max_retry"))          cfg.max_retry = t["max_retry"].asInt();
     if (t.isMember("max_body_size_mb"))   cfg.max_body_size_mb = t["max_body_size_mb"].asUInt64();
+    if (t.isMember("remote_read_stream_enabled")) cfg.remote_read_stream_enabled = t["remote_read_stream_enabled"].asBool();
+    if (t.isMember("remote_read_chunk_size_mb"))  cfg.remote_read_chunk_size_mb = t["remote_read_chunk_size_mb"].asUInt();
 }
 
 bool ParseJsonConfig(const std::string& json_str, FalconKVConfig& config) {

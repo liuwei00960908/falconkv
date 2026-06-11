@@ -26,7 +26,10 @@ public:
     /// Connect to a remote Store server at the given address (host:port).
     /// @param max_body_size_bytes  BRPC max body size in bytes for splitting large batches.
     Status Connect(const std::string& addr,
-                   uint64_t max_body_size_bytes = 512ULL * 1024 * 1024);
+                   uint64_t max_body_size_bytes = 512ULL * 1024 * 1024,
+                   uint32_t max_parallel_sub_batches = 4,
+                   bool stream_read_enabled = true,
+                   uint32_t stream_read_chunk_size_bytes = 16 * 1024 * 1024);
 
     /// Whether the client is connected.
     bool IsConnected() const { return connected_; }
@@ -55,10 +58,19 @@ public:
     Status Ping();
 
 private:
+    Status BatchReadStream(const std::vector<uint64_t>& offsets,
+                           const std::vector<uint32_t>& sizes,
+                           const std::vector<void*>& buffers,
+                           std::vector<int32_t>& results,
+                           const std::string& source_node_addr);
+
     brpc::Channel channel_;
     std::unique_ptr<FalconKVStoreService_Stub> stub_;
     bool connected_ = false;
     uint64_t max_body_size_bytes_ = 512ULL * 1024 * 1024;
+    uint32_t max_parallel_sub_batches_ = 4;
+    bool stream_read_enabled_ = true;
+    uint32_t stream_read_chunk_size_bytes_ = 16 * 1024 * 1024;
 };
 
 } // namespace falconkv

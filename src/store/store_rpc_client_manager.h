@@ -29,10 +29,19 @@ public:
     /// Set the BRPC max body size (in bytes) for all future connections.
     void SetMaxBodySize(uint64_t max_body_size_bytes);
 
+    /// Set the maximum number of split BatchRead RPCs to run in parallel.
+    void SetMaxParallelSubBatches(uint32_t max_parallel_sub_batches);
+
+    /// Configure streaming remote reads for future connections.
+    void SetStreamReadConfig(bool enabled, uint32_t chunk_size_bytes);
+
 private:
     std::mutex mutex_;
     std::unordered_map<std::string, std::unique_ptr<StoreRpcClient>> clients_;
     uint64_t max_body_size_bytes_ = 512ULL * 1024 * 1024;
+    uint32_t max_parallel_sub_batches_ = 4;
+    bool stream_read_enabled_ = true;
+    uint32_t stream_read_chunk_size_bytes_ = 16 * 1024 * 1024;
 };
 
 } // namespace falconkv

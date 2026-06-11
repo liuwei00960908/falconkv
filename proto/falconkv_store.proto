@@ -7,6 +7,7 @@ option cc_generic_services = true;
 service FalconKVStoreService {
     rpc Read(ReadRequest) returns (ReadResponse);
     rpc BatchRead(BatchReadRequest) returns (BatchReadResponse);
+    rpc BatchReadStream(BatchReadStreamRequest) returns (BatchReadStreamResponse);
     rpc GetByKey(GetByKeyRequest) returns (GetByKeyResponse);
     rpc BatchGetByKey(BatchGetByKeyRequest) returns (BatchGetByKeyResponse);
     rpc Ping(PingRequest) returns (PongResponse);
@@ -39,6 +40,17 @@ message BatchReadResponse {
     optional int32 status = 1;
     repeated bytes data_segments = 2;
     repeated uint32 bytes_read = 3;
+}
+
+message BatchReadStreamRequest {
+    repeated BatchReadSegment segments = 1;
+    optional string source_node_addr = 2;
+    optional uint32 chunk_size_bytes = 3;
+}
+
+message BatchReadStreamResponse {
+    optional int32 status = 1;
+    optional uint32 segment_count = 2;
 }
 
 // --- Key-based read RPCs for remote clients ---

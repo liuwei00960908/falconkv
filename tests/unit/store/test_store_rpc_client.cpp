@@ -5,6 +5,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <vector>
 
 #include "src/store/store_server.h"
 #include "src/store/store_rpc_client.h"
@@ -67,6 +68,83 @@ TEST_F(StoreRpcClientTest, ReadOffsetBased) {
     ASSERT_TRUE(rs.ok()) << rs.msg();
 
     EXPECT_EQ(write_data, read_buf);
+}
+
+TEST_F(StoreRpcClientTest, BatchReadForcedSplit) {
+    StoreRpcClient client;
+    ASSERT_TRUE(client.Connect(listen_addr_, 1024, 2, false).ok());
+
+    std::vector<std::string> write_data = {
+        std::string(512, 'A'),
+        std::string(512, 'B'),
+        std::string(512, 'C'),
+    };
+    std::vector<uint64_t> offsets = {0, 512, 1024};
+    std::vector<uint32_t> sizes = {512, 512, 512};
+
+    for (size_t i = 0; i < write_data.size(); ++i) {
+        Status ws = server_->GetStore()->Write(offsets[i], write_data[i].data(),
+                                               write_data[i].size());
+        ASSERT_TRUE(ws.ok()) << ws.msg();
+    }
+
+    std::vector<std::string> read_data = {
+        std::string(512, '\0'),
+        std::string(512, '\0'),
+        std::string(512, '\0'),
+    };
+    std::vector<void*> buffers;
+    buffers.reserve(read_data.size());
+    for (auto& data : read_data) {
+        buffers.push_back(data.data());
+    }
+
+    std::vector<int32_t> results;
+    Status rs = client.BatchRead(offsets, sizes, buffers, results);
+    ASSERT_TRUE(rs.ok()) << rs.msg();
+    ASSERT_EQ(write_data.size(), results.size());
+
+    for (size_t i = 0; i < write_data.size(); ++i) {
+        EXPECT_EQ(static_cast<int32_t>(sizes[i]), results[i]);
+        EXPECT_EQ(write_data[i], read_data[i]);
+    }
+}
+
+TEST_F(StoreRpcClientTest, BatchReadStreamChunks) {
+    StoreRpcClient client;
+    ASSERT_TRUE(client.Connect(listen_addr_, 16 * 1024 * 1024, 2,
+                               true, 512).ok());
+
+    std::string first(1024, 'X');
+    std::string second(512, 'Y');
+    std::vector<std::string> write_data = {first, second};
+    std::vector<uint64_t> offsets = {0, 1024};
+    std::vector<uint32_t> sizes = {1024, 512};
+
+    for (size_t i = 0; i < write_data.size(); ++i) {
+        Status ws = server_->GetStore()->Write(offsets[i], write_data[i].data(),
+                                               write_data[i].size());
+        ASSERT_TRUE(ws.ok()) << ws.msg();
+    }
+
+    std::vector<std::string> read_data = {
+        std::string(1024, '\0'),
+        std::string(512, '\0'),
+    };
+    std::vector<void*> buffers;
+    for (auto& data : read_data) {
+        buffers.push_back(data.data());
+    }
+
+    std::vector<int32_t> results;
+    Status rs = client.BatchRead(offsets, sizes, buffers, results);
+    ASSERT_TRUE(rs.ok()) << rs.msg();
+    ASSERT_EQ(write_data.size(), results.size());
+
+    for (size_t i = 0; i < write_data.size(); ++i) {
+        EXPECT_EQ(static_cast<int32_t>(sizes[i]), results[i]);
+        EXPECT_EQ(write_data[i], read_data[i]);
+    }
 }
 
 TEST_F(StoreRpcClientTest, ConnectToInvalidAddr) {

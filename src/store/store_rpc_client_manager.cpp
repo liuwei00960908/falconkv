@@ -1,5 +1,7 @@
 #include "src/store/store_rpc_client_manager.h"
 
+#include <algorithm>
+
 #include "src/common/logging.h"
 
 namespace falconkv {
@@ -22,7 +24,10 @@ StoreRpcClient* StoreRpcClientManager::GetOrCreate(const std::string& addr) {
 
     // Create a new client
     auto client = std::make_unique<StoreRpcClient>();
-    Status s = client->Connect(addr, max_body_size_bytes_);
+    Status s = client->Connect(addr, max_body_size_bytes_,
+                               max_parallel_sub_batches_,
+                               stream_read_enabled_,
+                               stream_read_chunk_size_bytes_);
     if (!s.ok()) {
         return nullptr;
     }
@@ -35,6 +40,17 @@ StoreRpcClient* StoreRpcClientManager::GetOrCreate(const std::string& addr) {
 
 void StoreRpcClientManager::SetMaxBodySize(uint64_t max_body_size_bytes) {
     max_body_size_bytes_ = max_body_size_bytes;
+}
+
+void StoreRpcClientManager::SetMaxParallelSubBatches(
+    uint32_t max_parallel_sub_batches) {
+    max_parallel_sub_batches_ = std::max<uint32_t>(1, max_parallel_sub_batches);
+}
+
+void StoreRpcClientManager::SetStreamReadConfig(bool enabled,
+                                                uint32_t chunk_size_bytes) {
+    stream_read_enabled_ = enabled;
+    stream_read_chunk_size_bytes_ = std::max<uint32_t>(1, chunk_size_bytes);
 }
 
 void StoreRpcClientManager::CloseAll() {

@@ -81,6 +81,8 @@ struct TransferConfig {
     int connect_timeout_ms = 3000;
     int max_retry = 3;
     uint64_t max_body_size_mb = 512;  // BRPC max body size (MB)
+    bool remote_read_stream_enabled = true;
+    uint32_t remote_read_chunk_size_mb = 16;
 };
 
 struct FalconKVConfig {

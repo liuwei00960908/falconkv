@@ -1,23 +1,156 @@
 #include "src/store/store_rpc_client.h"
 
+#include <algorithm>
+#include <condition_variable>
+#include <future>
+#include <mutex>
+
 #include <brpc/controller.h>
+#include <brpc/stream.h>
+#include <butil/iobuf.h>
 
 #include "src/common/logging.h"
 
 namespace falconkv {
+
+namespace {
+
+constexpr uint32_t kStreamChunkMagic = 0x46525331;  // "FRS1"
+constexpr uint32_t kStreamChunkVersion = 1;
+
+struct StreamChunkHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t segment_index;
+    uint32_t status;
+    uint64_t offset_in_segment;
+    uint32_t payload_size;
+    uint32_t reserved;
+};
+
+class BatchReadStreamHandler : public brpc::StreamInputHandler {
+public:
+    BatchReadStreamHandler(const std::vector<uint32_t>& sizes,
+                           const std::vector<void*>& buffers,
+                           std::vector<int32_t>& results)
+        : sizes_(sizes), buffers_(buffers), results_(results) {}
+
+    int on_received_messages(brpc::StreamId,
+                             butil::IOBuf* const messages[],
+                             size_t size) override {
+        for (size_t i = 0; i < size; ++i) {
+            butil::IOBuf* msg = messages[i];
+            if (!msg || msg->size() < sizeof(StreamChunkHeader)) {
+                MarkFailed("stream chunk too small");
+                return -1;
+            }
+
+            StreamChunkHeader header;
+            msg->copy_to(&header, sizeof(header), 0);
+            if (header.magic != kStreamChunkMagic ||
+                header.version != kStreamChunkVersion ||
+                header.segment_index >= sizes_.size()) {
+                MarkFailed("invalid stream chunk header");
+                return -1;
+            }
+            if (header.status != 0) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                results_[header.segment_index] = -1;
+                failed_ = true;
+                error_msg_ = "remote stream chunk read failed";
+                return -1;
+            }
+            if (msg->size() < sizeof(StreamChunkHeader) + header.payload_size ||
+                header.offset_in_segment + header.payload_size >
+                    sizes_[header.segment_index]) {
+                MarkFailed("invalid stream chunk payload");
+                return -1;
+            }
+
+            char* dst = static_cast<char*>(buffers_[header.segment_index]) +
+                        header.offset_in_segment;
+            msg->copy_to(dst, header.payload_size, sizeof(StreamChunkHeader));
+
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (results_[header.segment_index] >= 0) {
+                results_[header.segment_index] +=
+                    static_cast<int32_t>(header.payload_size);
+            }
+        }
+        return 0;
+    }
+
+    void on_idle_timeout(brpc::StreamId) override {
+        MarkFailed("stream idle timeout");
+        MarkDone();
+    }
+
+    void on_failed(brpc::StreamId, int, const std::string& error_text) override {
+        MarkFailed(error_text);
+    }
+
+    void on_closed(brpc::StreamId) override {
+        MarkDone();
+    }
+
+    Status Wait() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return done_; });
+        if (failed_) {
+            return Status::RpcError(error_msg_.empty() ? "stream read failed"
+                                                      : error_msg_);
+        }
+        for (size_t i = 0; i < sizes_.size(); ++i) {
+            if (results_[i] != static_cast<int32_t>(sizes_[i])) {
+                return Status::RpcError("stream read incomplete");
+            }
+        }
+        return Status::OK();
+    }
+
+private:
+    void MarkFailed(const std::string& msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        failed_ = true;
+        error_msg_ = msg;
+    }
+
+    void MarkDone() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        done_ = true;
+        cv_.notify_all();
+    }
+
+    const std::vector<uint32_t>& sizes_;
+    const std::vector<void*>& buffers_;
+    std::vector<int32_t>& results_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    bool failed_ = false;
+    std::string error_msg_;
+};
+
+} // namespace
 
 StoreRpcClient::StoreRpcClient() = default;
 
 StoreRpcClient::~StoreRpcClient() = default;
 
 Status StoreRpcClient::Connect(const std::string& addr,
-                               uint64_t max_body_size_bytes) {
+                               uint64_t max_body_size_bytes,
+                               uint32_t max_parallel_sub_batches,
+                               bool stream_read_enabled,
+                               uint32_t stream_read_chunk_size_bytes) {
     if (addr.empty()) {
         LOG(ERROR) << "[StoreRpcClient] Connect: empty store address";
         return Status::InvalidArg("empty store address");
     }
 
     max_body_size_bytes_ = max_body_size_bytes;
+    max_parallel_sub_batches_ = std::max<uint32_t>(1, max_parallel_sub_batches);
+    stream_read_enabled_ = stream_read_enabled;
+    stream_read_chunk_size_bytes_ = std::max<uint32_t>(1, stream_read_chunk_size_bytes);
 
     brpc::ChannelOptions options;
     options.connect_timeout_ms = 3000;
@@ -83,6 +216,52 @@ Status StoreRpcClient::Read(uint64_t offset, void* buffer, uint32_t size,
     return Status::OK();
 }
 
+Status StoreRpcClient::BatchReadStream(const std::vector<uint64_t>& offsets,
+                                       const std::vector<uint32_t>& sizes,
+                                       const std::vector<void*>& buffers,
+                                       std::vector<int32_t>& results,
+                                       const std::string& source_node_addr) {
+    results.assign(offsets.size(), 0);
+
+    BatchReadStreamRequest request;
+    for (size_t i = 0; i < offsets.size(); ++i) {
+        auto* seg = request.add_segments();
+        seg->set_offset(offsets[i]);
+        seg->set_size(sizes[i]);
+    }
+    if (!source_node_addr.empty()) {
+        request.set_source_node_addr(source_node_addr);
+    }
+    request.set_chunk_size_bytes(stream_read_chunk_size_bytes_);
+
+    BatchReadStreamResponse response;
+    brpc::Controller cntl;
+    BatchReadStreamHandler handler(sizes, buffers, results);
+
+    brpc::StreamOptions stream_options;
+    stream_options.max_buf_size = 32 * 1024 * 1024;
+    stream_options.handler = &handler;
+
+    brpc::StreamId stream_id = brpc::INVALID_STREAM_ID;
+    if (brpc::StreamCreate(&stream_id, cntl, &stream_options) != 0) {
+        return Status::RpcError("Store BatchReadStream: StreamCreate failed");
+    }
+
+    stub_->BatchReadStream(&cntl, &request, &response, nullptr);
+    if (cntl.Failed()) {
+        brpc::StreamClose(stream_id);
+        return Status::RpcError("Store BatchReadStream RPC failed: " +
+                                std::string(cntl.ErrorText()));
+    }
+    if (response.status() != 0 ||
+        response.segment_count() != offsets.size()) {
+        brpc::StreamClose(stream_id);
+        return Status::RpcError("Store BatchReadStream setup failed");
+    }
+
+    return handler.Wait();
+}
+
 Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
                                  const std::vector<uint32_t>& sizes,
                                  const std::vector<void*>& buffers,
@@ -105,6 +284,17 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
 
     if (n == 0) {
         return Status::OK();
+    }
+
+    if (stream_read_enabled_) {
+        Status stream_status = BatchReadStream(offsets, sizes, buffers, results,
+                                               source_node_addr);
+        if (stream_status.ok()) {
+            return Status::OK();
+        }
+        LOG(WARNING) << "[StoreRpcClient] BatchReadStream failed, falling back: "
+                     << stream_status.ToString();
+        results.assign(n, 0);
     }
 
     // Effective limit: reserve 10% for protobuf overhead
@@ -143,9 +333,7 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
                   << effective_limit << " bytes)";
     }
 
-    // Execute each sub-batch as an independent RPC
-    bool any_rpc_failed = false;
-    for (const auto& batch : sub_batches) {
+    auto run_sub_batch = [&](const SubBatch& batch) -> Status {
         const auto& indices = batch.original_indices;
         size_t batch_n = indices.size();
 
@@ -162,7 +350,8 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
         BatchReadResponse response;
         brpc::Controller cntl;
 
-        stub_->BatchRead(&cntl, &request, &response, nullptr);
+        FalconKVStoreService_Stub stub(&channel_);
+        stub.BatchRead(&cntl, &request, &response, nullptr);
 
         if (cntl.Failed()) {
             LOG(ERROR) << "[StoreRpcClient] BatchRead RPC failed (sub-batch of "
@@ -170,8 +359,8 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
             for (size_t j = 0; j < batch_n; ++j) {
                 results[indices[j]] = -1;
             }
-            any_rpc_failed = true;
-            continue;
+            return Status::RpcError("Store BatchRead RPC failed: " +
+                                    std::string(cntl.ErrorText()));
         }
 
         if (response.status() != 0) {
@@ -180,8 +369,8 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
             for (size_t j = 0; j < batch_n; ++j) {
                 results[indices[j]] = -1;
             }
-            any_rpc_failed = true;
-            continue;
+            return Status::IoError("Store BatchRead failed with status: " +
+                                   std::to_string(response.status()));
         }
 
         int seg_count = response.bytes_read_size();
@@ -191,8 +380,7 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
             for (size_t j = 0; j < batch_n; ++j) {
                 results[indices[j]] = -1;
             }
-            any_rpc_failed = true;
-            continue;
+            return Status::RpcError("Store BatchRead: response segment count mismatch");
         }
 
         // Read data from brpc attachment
@@ -209,6 +397,31 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
                                                att_offset);
             att_offset += bytes_read;
             results[orig_idx] = static_cast<int32_t>(to_copy);
+        }
+        return Status::OK();
+    };
+
+    // Execute split RPCs with bounded parallelism so later sub-batches can
+    // start remote SSD reads before earlier responses finish copying back.
+    bool any_rpc_failed = false;
+    const size_t parallelism = std::max<size_t>(1, max_parallel_sub_batches_);
+    for (size_t start = 0; start < sub_batches.size(); start += parallelism) {
+        size_t end = std::min(start + parallelism, sub_batches.size());
+        std::vector<std::future<Status>> futures;
+        futures.reserve(end - start);
+
+        for (size_t i = start; i < end; ++i) {
+            futures.emplace_back(std::async(std::launch::async,
+                [&, batch = sub_batches[i]]() {
+                    return run_sub_batch(batch);
+                }));
+        }
+
+        for (auto& future : futures) {
+            Status s = future.get();
+            if (!s.ok()) {
+                any_rpc_failed = true;
+            }
         }
     }
 

@@ -52,6 +52,8 @@
         "rpc_timeout_ms": 5000,
         "connect_timeout_ms": 3000,
         "max_retry": 3,
-        "max_body_size_mb": 512
+        "max_body_size_mb": 512,
+        "remote_read_stream_enabled": true,
+        "remote_read_chunk_size_mb": 16
     }
 }

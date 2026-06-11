@@ -3,12 +3,62 @@
 
 #include <brpc/closure_guard.h>
 #include <brpc/controller.h>
+#include <brpc/stream.h>
+#include <butil/iobuf.h>
 
+#include <algorithm>
+#include <cerrno>
 #include <cstring>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 #include "src/common/time_util.h"
 
 namespace falconkv {
+
+namespace {
+
+constexpr uint32_t kStreamChunkMagic = 0x46525331;  // "FRS1"
+constexpr uint32_t kStreamChunkVersion = 1;
+constexpr uint32_t kDefaultStreamChunkSize = 16 * 1024 * 1024;
+
+struct StreamChunkHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t segment_index;
+    uint32_t status;
+    uint64_t offset_in_segment;
+    uint32_t payload_size;
+    uint32_t reserved;
+};
+
+struct StreamReadSlice {
+    uint32_t segment_index;
+    uint64_t offset;
+    uint64_t offset_in_segment;
+    uint32_t size;
+};
+
+int StreamWriteWithBackpressure(brpc::StreamId stream_id, butil::IOBuf& msg) {
+    brpc::StreamWriteOptions options;
+    options.write_in_background = true;
+    while (true) {
+        int rc = brpc::StreamWrite(stream_id, msg, &options);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc == EAGAIN) {
+            int wait_rc = brpc::StreamWait(stream_id, nullptr);
+            if (wait_rc == 0) {
+                continue;
+            }
+            return wait_rc;
+        }
+        return rc;
+    }
+}
+
+} // namespace
 
 StoreServiceImpl::StoreServiceImpl(FalconKVStore* store)
     : store_(store) {}
@@ -131,6 +181,133 @@ void StoreServiceImpl::BatchRead(::google::protobuf::RpcController* controller,
         cntl->response_attachment().append_user_data(
             buffers[i].release(), items[i].size, AlignedAllocator::Free);
     }
+}
+
+// -----------------------------------------------------------------
+// BatchReadStream (offset-based, stream response chunks)
+// -----------------------------------------------------------------
+void StoreServiceImpl::BatchReadStream(::google::protobuf::RpcController* controller,
+                                       const BatchReadStreamRequest* request,
+                                       BatchReadStreamResponse* response,
+                                       ::google::protobuf::Closure* done) {
+    brpc::ClosureGuard done_guard(done);
+    auto* cntl = static_cast<brpc::Controller*>(controller);
+
+    brpc::StreamId stream_id = brpc::INVALID_STREAM_ID;
+    brpc::StreamOptions stream_options;
+    stream_options.max_buf_size = 32 * 1024 * 1024;
+    if (brpc::StreamAccept(&stream_id, *cntl, &stream_options) != 0) {
+        response->set_status(-1);
+        response->set_segment_count(0);
+        return;
+    }
+
+    std::vector<StreamReadSlice> slices;
+    slices.reserve(request->segments_size());
+    for (int i = 0; i < request->segments_size(); ++i) {
+        const auto& seg = request->segments(i);
+        if (seg.size() == 0) {
+            continue;
+        }
+        slices.push_back({static_cast<uint32_t>(i), seg.offset(), 0, seg.size()});
+    }
+
+    uint32_t chunk_size = request->chunk_size_bytes() > 0
+        ? request->chunk_size_bytes()
+        : kDefaultStreamChunkSize;
+    chunk_size = std::max<uint32_t>(1, chunk_size);
+    std::string source_node_addr = request->source_node_addr();
+    FalconKVStore* store = store_;
+
+    response->set_status(0);
+    response->set_segment_count(request->segments_size());
+
+    std::thread([store, stream_id, slices = std::move(slices), chunk_size,
+                 source_node_addr = std::move(source_node_addr)]() mutable {
+        size_t next = 0;
+        while (next < slices.size()) {
+            std::vector<StreamReadSlice> chunk;
+            uint64_t chunk_bytes = 0;
+
+            while (next < slices.size() && chunk_bytes < chunk_size) {
+                StreamReadSlice slice = slices[next];
+                uint32_t take = static_cast<uint32_t>(
+                    std::min<uint64_t>(slice.size, chunk_size - chunk_bytes));
+                slice.size = take;
+                chunk.push_back(slice);
+                chunk_bytes += take;
+
+                slices[next].offset += take;
+                slices[next].offset_in_segment += take;
+                slices[next].size -= take;
+                if (slices[next].size == 0) {
+                    ++next;
+                }
+            }
+
+            std::vector<ReadItem> items;
+            std::vector<std::unique_ptr<void, void(*)(void*)>> buffers;
+            items.reserve(chunk.size());
+            buffers.reserve(chunk.size());
+
+            bool alloc_failed = false;
+            for (const auto& slice : chunk) {
+                void* buf = AlignedAllocator::Allocate(512, slice.size);
+                if (!buf) {
+                    alloc_failed = true;
+                    break;
+                }
+                buffers.emplace_back(buf, &AlignedAllocator::Free);
+                items.push_back({slice.offset, buf, slice.size});
+            }
+
+            uint64_t request_ts_ns = GetCurrentTimeNs();
+            Status s = alloc_failed ? Status::NoSpace("stream chunk allocation failed")
+                                    : store->BatchRead(items);
+            uint64_t done_ts_ns = GetCurrentTimeNs();
+
+            if (store->scheduler_proxy() && s.ok()) {
+                store->scheduler_proxy()->StoreReportIOAsync(
+                    store->store_id(),
+                    3,  // NET_RX_READ
+                    0,
+                    chunk_bytes,
+                    request_ts_ns,
+                    done_ts_ns,
+                    source_node_addr);
+            }
+
+            for (size_t i = 0; i < chunk.size(); ++i) {
+                const auto& slice = chunk[i];
+                StreamChunkHeader header;
+                header.magic = kStreamChunkMagic;
+                header.version = kStreamChunkVersion;
+                header.segment_index = slice.segment_index;
+                header.status = s.ok() ? 0 : static_cast<uint32_t>(s.code());
+                header.offset_in_segment = slice.offset_in_segment;
+                header.payload_size = s.ok() ? slice.size : 0;
+                header.reserved = 0;
+
+                butil::IOBuf msg;
+                msg.append(&header, sizeof(header));
+                if (s.ok()) {
+                    msg.append_user_data(buffers[i].release(), slice.size,
+                                         AlignedAllocator::Free);
+                }
+                if (StreamWriteWithBackpressure(stream_id, msg) != 0) {
+                    brpc::StreamClose(stream_id);
+                    return;
+                }
+            }
+
+            if (!s.ok()) {
+                brpc::StreamClose(stream_id);
+                return;
+            }
+        }
+
+        brpc::StreamClose(stream_id);
+    }).detach();
 }
 
 // -----------------------------------------------------------------

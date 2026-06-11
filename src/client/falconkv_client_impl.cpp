@@ -77,6 +77,11 @@ FalconKVClientImpl::FalconKVClientImpl(const Config& config)
 
     // Pass max_body_size config to StoreRpcClientManager for batch splitting
     store_rpc_mgr_.SetMaxBodySize(cfg.transfer.max_body_size_mb * 1024ULL * 1024ULL);
+    // Reuse store_pool_size as the parallelism for split remote BatchRead RPCs.
+    store_rpc_mgr_.SetMaxParallelSubBatches(cfg.transfer.store_pool_size);
+    store_rpc_mgr_.SetStreamReadConfig(
+        cfg.transfer.remote_read_stream_enabled,
+        cfg.transfer.remote_read_chunk_size_mb * 1024U * 1024U);
 }
 
 FalconKVClientImpl::~FalconKVClientImpl() {

@@ -116,6 +116,8 @@ void ApplyEnvOverrides(FalconKVConfig& config) {
     config.transfer.max_body_size_mb = GetEnvOrDefaultUInt64("FALCONKV_MAX_BODY_SIZE_MB", config.transfer.max_body_size_mb);
     config.transfer.remote_read_stream_enabled = GetEnvOrDefault("FALCONKV_REMOTE_READ_STREAM_ENABLED", config.transfer.remote_read_stream_enabled ? "1" : "0") == "1";
     config.transfer.remote_read_chunk_size_mb = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_CHUNK_SIZE_MB", config.transfer.remote_read_chunk_size_mb);
+    config.transfer.remote_read_prefetch_chunks = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_PREFETCH_CHUNKS", config.transfer.remote_read_prefetch_chunks);
+    config.transfer.remote_read_queue_chunks = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_QUEUE_CHUNKS", config.transfer.remote_read_queue_chunks);
 }
 
 void ParseCommonConfig(const Json::Value& root, CommonConfig& cfg) {
@@ -213,6 +215,8 @@ void ParseTransferConfig(const Json::Value& root, TransferConfig& cfg) {
     if (t.isMember("max_body_size_mb"))   cfg.max_body_size_mb = t["max_body_size_mb"].asUInt64();
     if (t.isMember("remote_read_stream_enabled")) cfg.remote_read_stream_enabled = t["remote_read_stream_enabled"].asBool();
     if (t.isMember("remote_read_chunk_size_mb"))  cfg.remote_read_chunk_size_mb = t["remote_read_chunk_size_mb"].asUInt();
+    if (t.isMember("remote_read_prefetch_chunks")) cfg.remote_read_prefetch_chunks = t["remote_read_prefetch_chunks"].asUInt();
+    if (t.isMember("remote_read_queue_chunks"))    cfg.remote_read_queue_chunks = t["remote_read_queue_chunks"].asUInt();
 }
 
 bool ParseJsonConfig(const std::string& json_str, FalconKVConfig& config) {

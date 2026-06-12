@@ -81,7 +81,9 @@ FalconKVClientImpl::FalconKVClientImpl(const Config& config)
     store_rpc_mgr_.SetMaxParallelSubBatches(cfg.transfer.store_pool_size);
     store_rpc_mgr_.SetStreamReadConfig(
         cfg.transfer.remote_read_stream_enabled,
-        cfg.transfer.remote_read_chunk_size_mb * 1024U * 1024U);
+        cfg.transfer.remote_read_chunk_size_mb * 1024U * 1024U,
+        cfg.transfer.remote_read_prefetch_chunks,
+        cfg.transfer.remote_read_queue_chunks);
 }
 
 FalconKVClientImpl::~FalconKVClientImpl() {

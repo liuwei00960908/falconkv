@@ -54,6 +54,8 @@
         "max_retry": 3,
         "max_body_size_mb": 512,
         "remote_read_stream_enabled": true,
-        "remote_read_chunk_size_mb": 16
+        "remote_read_chunk_size_mb": 16,
+        "remote_read_prefetch_chunks": 4,
+        "remote_read_queue_chunks": 4
     }
 }

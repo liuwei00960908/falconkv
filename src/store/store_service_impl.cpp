@@ -7,8 +7,13 @@
 #include <butil/iobuf.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -21,6 +26,8 @@ namespace {
 constexpr uint32_t kStreamChunkMagic = 0x46525331;  // "FRS1"
 constexpr uint32_t kStreamChunkVersion = 1;
 constexpr uint32_t kDefaultStreamChunkSize = 16 * 1024 * 1024;
+constexpr uint32_t kDefaultStreamPrefetchChunks = 4;
+constexpr uint32_t kDefaultStreamQueueChunks = 4;
 
 struct StreamChunkHeader {
     uint32_t magic;
@@ -37,6 +44,59 @@ struct StreamReadSlice {
     uint64_t offset;
     uint64_t offset_in_segment;
     uint32_t size;
+};
+
+struct StreamReadChunk {
+    std::vector<StreamReadSlice> slices;
+    uint64_t total_size = 0;
+};
+
+class StreamMessageQueue {
+public:
+    explicit StreamMessageQueue(size_t capacity)
+        : capacity_(std::max<size_t>(1, capacity)) {}
+
+    bool Push(std::unique_ptr<butil::IOBuf> msg) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        not_full_.wait(lock, [this] {
+            return closed_ || queue_.size() < capacity_;
+        });
+        if (closed_) {
+            return false;
+        }
+        queue_.push_back(std::move(msg));
+        not_empty_.notify_one();
+        return true;
+    }
+
+    bool Pop(std::unique_ptr<butil::IOBuf>& msg) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        not_empty_.wait(lock, [this] {
+            return closed_ || !queue_.empty();
+        });
+        if (queue_.empty()) {
+            return false;
+        }
+        msg = std::move(queue_.front());
+        queue_.pop_front();
+        not_full_.notify_one();
+        return true;
+    }
+
+    void Close() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        closed_ = true;
+        not_empty_.notify_all();
+        not_full_.notify_all();
+    }
+
+private:
+    size_t capacity_;
+    std::mutex mutex_;
+    std::condition_variable not_empty_;
+    std::condition_variable not_full_;
+    std::deque<std::unique_ptr<butil::IOBuf>> queue_;
+    bool closed_ = false;
 };
 
 int StreamWriteWithBackpressure(brpc::StreamId stream_id, butil::IOBuf& msg) {
@@ -216,97 +276,149 @@ void StoreServiceImpl::BatchReadStream(::google::protobuf::RpcController* contro
         ? request->chunk_size_bytes()
         : kDefaultStreamChunkSize;
     chunk_size = std::max<uint32_t>(1, chunk_size);
+    uint32_t prefetch_chunks = request->prefetch_chunks() > 0
+        ? request->prefetch_chunks()
+        : kDefaultStreamPrefetchChunks;
+    prefetch_chunks = std::max<uint32_t>(1, prefetch_chunks);
+    uint32_t queue_chunks = request->queue_chunks() > 0
+        ? request->queue_chunks()
+        : kDefaultStreamQueueChunks;
+    queue_chunks = std::max<uint32_t>(1, queue_chunks);
     std::string source_node_addr = request->source_node_addr();
     FalconKVStore* store = store_;
+
+    std::vector<StreamReadChunk> chunks;
+    size_t next = 0;
+    while (next < slices.size()) {
+        StreamReadChunk chunk;
+        while (next < slices.size() && chunk.total_size < chunk_size) {
+            StreamReadSlice slice = slices[next];
+            uint32_t take = static_cast<uint32_t>(
+                std::min<uint64_t>(slice.size, chunk_size - chunk.total_size));
+            slice.size = take;
+            chunk.slices.push_back(slice);
+            chunk.total_size += take;
+
+            slices[next].offset += take;
+            slices[next].offset_in_segment += take;
+            slices[next].size -= take;
+            if (slices[next].size == 0) {
+                ++next;
+            }
+        }
+        if (!chunk.slices.empty()) {
+            chunks.push_back(std::move(chunk));
+        }
+    }
 
     response->set_status(0);
     response->set_segment_count(request->segments_size());
 
-    std::thread([store, stream_id, slices = std::move(slices), chunk_size,
-                 source_node_addr = std::move(source_node_addr)]() mutable {
-        size_t next = 0;
-        while (next < slices.size()) {
-            std::vector<StreamReadSlice> chunk;
-            uint64_t chunk_bytes = 0;
+    std::thread([store, stream_id, chunks = std::move(chunks), prefetch_chunks,
+                 queue_chunks, source_node_addr = std::move(source_node_addr)]() mutable {
+        auto queue = std::make_shared<StreamMessageQueue>(queue_chunks);
+        std::atomic<size_t> next_chunk{0};
+        std::atomic<bool> failed{false};
 
-            while (next < slices.size() && chunk_bytes < chunk_size) {
-                StreamReadSlice slice = slices[next];
-                uint32_t take = static_cast<uint32_t>(
-                    std::min<uint64_t>(slice.size, chunk_size - chunk_bytes));
-                slice.size = take;
-                chunk.push_back(slice);
-                chunk_bytes += take;
-
-                slices[next].offset += take;
-                slices[next].offset_in_segment += take;
-                slices[next].size -= take;
-                if (slices[next].size == 0) {
-                    ++next;
-                }
-            }
-
-            std::vector<ReadItem> items;
-            std::vector<std::unique_ptr<void, void(*)(void*)>> buffers;
-            items.reserve(chunk.size());
-            buffers.reserve(chunk.size());
-
-            bool alloc_failed = false;
-            for (const auto& slice : chunk) {
-                void* buf = AlignedAllocator::Allocate(512, slice.size);
-                if (!buf) {
-                    alloc_failed = true;
+        std::thread sender([stream_id, queue, &failed]() {
+            std::unique_ptr<butil::IOBuf> msg;
+            while (queue->Pop(msg)) {
+                if (StreamWriteWithBackpressure(stream_id, *msg) != 0) {
+                    failed.store(true, std::memory_order_release);
+                    queue->Close();
                     break;
                 }
-                buffers.emplace_back(buf, &AlignedAllocator::Free);
-                items.push_back({slice.offset, buf, slice.size});
             }
+            brpc::StreamClose(stream_id);
+        });
 
-            uint64_t request_ts_ns = GetCurrentTimeNs();
-            Status s = alloc_failed ? Status::NoSpace("stream chunk allocation failed")
-                                    : store->BatchRead(items);
-            uint64_t done_ts_ns = GetCurrentTimeNs();
-
-            if (store->scheduler_proxy() && s.ok()) {
-                store->scheduler_proxy()->StoreReportIOAsync(
-                    store->store_id(),
-                    3,  // NET_RX_READ
-                    0,
-                    chunk_bytes,
-                    request_ts_ns,
-                    done_ts_ns,
-                    source_node_addr);
-            }
-
-            for (size_t i = 0; i < chunk.size(); ++i) {
-                const auto& slice = chunk[i];
-                StreamChunkHeader header;
-                header.magic = kStreamChunkMagic;
-                header.version = kStreamChunkVersion;
-                header.segment_index = slice.segment_index;
-                header.status = s.ok() ? 0 : static_cast<uint32_t>(s.code());
-                header.offset_in_segment = slice.offset_in_segment;
-                header.payload_size = s.ok() ? slice.size : 0;
-                header.reserved = 0;
-
-                butil::IOBuf msg;
-                msg.append(&header, sizeof(header));
-                if (s.ok()) {
-                    msg.append_user_data(buffers[i].release(), slice.size,
-                                         AlignedAllocator::Free);
+        auto reader = [&]() {
+            while (!failed.load(std::memory_order_acquire)) {
+                size_t idx = next_chunk.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= chunks.size()) {
+                    return;
                 }
-                if (StreamWriteWithBackpressure(stream_id, msg) != 0) {
-                    brpc::StreamClose(stream_id);
+                const auto& chunk = chunks[idx];
+
+                std::vector<ReadItem> items;
+                std::vector<std::unique_ptr<void, void(*)(void*)>> buffers;
+                items.reserve(chunk.slices.size());
+                buffers.reserve(chunk.slices.size());
+
+                bool alloc_failed = false;
+                for (const auto& slice : chunk.slices) {
+                    void* buf = AlignedAllocator::Allocate(512, slice.size);
+                    if (!buf) {
+                        alloc_failed = true;
+                        break;
+                    }
+                    buffers.emplace_back(buf, &AlignedAllocator::Free);
+                    items.push_back({slice.offset, buf, slice.size});
+                }
+
+                uint64_t request_ts_ns = GetCurrentTimeNs();
+                Status s = alloc_failed
+                    ? Status::NoSpace("stream chunk allocation failed")
+                    : store->BatchRead(items);
+                uint64_t done_ts_ns = GetCurrentTimeNs();
+
+                if (store->scheduler_proxy() && s.ok()) {
+                    store->scheduler_proxy()->StoreReportIOAsync(
+                        store->store_id(),
+                        3,  // NET_RX_READ
+                        0,
+                        chunk.total_size,
+                        request_ts_ns,
+                        done_ts_ns,
+                        source_node_addr);
+                }
+
+                auto msg = std::make_unique<butil::IOBuf>();
+                for (size_t i = 0; i < chunk.slices.size(); ++i) {
+                    const auto& slice = chunk.slices[i];
+                    StreamChunkHeader header;
+                    header.magic = kStreamChunkMagic;
+                    header.version = kStreamChunkVersion;
+                    header.segment_index = slice.segment_index;
+                    header.status = s.ok() ? 0 : static_cast<uint32_t>(s.code());
+                    header.offset_in_segment = slice.offset_in_segment;
+                    header.payload_size = s.ok() ? slice.size : 0;
+                    header.reserved = 0;
+
+                    msg->append(&header, sizeof(header));
+                    if (s.ok()) {
+                        msg->append_user_data(buffers[i].release(), slice.size,
+                                              AlignedAllocator::Free);
+                    }
+                }
+                if (!queue->Push(std::move(msg))) {
+                    return;
+                }
+
+                if (!s.ok()) {
+                    failed.store(true, std::memory_order_release);
+                    queue->Close();
                     return;
                 }
             }
+        };
 
-            if (!s.ok()) {
-                brpc::StreamClose(stream_id);
-                return;
+        std::vector<std::thread> readers;
+        size_t reader_count = std::min<size_t>(prefetch_chunks,
+                                               std::max<size_t>(1, chunks.size()));
+        readers.reserve(reader_count);
+        for (size_t i = 0; i < reader_count; ++i) {
+            readers.emplace_back(reader);
+        }
+        for (auto& t : readers) {
+            if (t.joinable()) {
+                t.join();
             }
         }
-
-        brpc::StreamClose(stream_id);
+        queue->Close();
+        if (sender.joinable()) {
+            sender.join();
+        }
     }).detach();
 }
 

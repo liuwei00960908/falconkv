@@ -40,41 +40,52 @@ public:
                              size_t size) override {
         for (size_t i = 0; i < size; ++i) {
             butil::IOBuf* msg = messages[i];
-            if (!msg || msg->size() < sizeof(StreamChunkHeader)) {
-                MarkFailed("stream chunk too small");
+            if (!msg) {
+                MarkFailed("empty stream message");
                 return -1;
             }
 
-            StreamChunkHeader header;
-            msg->copy_to(&header, sizeof(header), 0);
-            if (header.magic != kStreamChunkMagic ||
-                header.version != kStreamChunkVersion ||
-                header.segment_index >= sizes_.size()) {
-                MarkFailed("invalid stream chunk header");
-                return -1;
-            }
-            if (header.status != 0) {
+            size_t pos = 0;
+            while (pos < msg->size()) {
+                if (msg->size() - pos < sizeof(StreamChunkHeader)) {
+                    MarkFailed("stream chunk too small");
+                    return -1;
+                }
+
+                StreamChunkHeader header;
+                msg->copy_to(&header, sizeof(header), pos);
+                pos += sizeof(header);
+
+                if (header.magic != kStreamChunkMagic ||
+                    header.version != kStreamChunkVersion ||
+                    header.segment_index >= sizes_.size()) {
+                    MarkFailed("invalid stream chunk header");
+                    return -1;
+                }
+                if (header.status != 0) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    results_[header.segment_index] = -1;
+                    failed_ = true;
+                    error_msg_ = "remote stream chunk read failed";
+                    return -1;
+                }
+                if (msg->size() - pos < header.payload_size ||
+                    header.offset_in_segment + header.payload_size >
+                        sizes_[header.segment_index]) {
+                    MarkFailed("invalid stream chunk payload");
+                    return -1;
+                }
+
+                char* dst = static_cast<char*>(buffers_[header.segment_index]) +
+                            header.offset_in_segment;
+                msg->copy_to(dst, header.payload_size, pos);
+                pos += header.payload_size;
+
                 std::lock_guard<std::mutex> lock(mutex_);
-                results_[header.segment_index] = -1;
-                failed_ = true;
-                error_msg_ = "remote stream chunk read failed";
-                return -1;
-            }
-            if (msg->size() < sizeof(StreamChunkHeader) + header.payload_size ||
-                header.offset_in_segment + header.payload_size >
-                    sizes_[header.segment_index]) {
-                MarkFailed("invalid stream chunk payload");
-                return -1;
-            }
-
-            char* dst = static_cast<char*>(buffers_[header.segment_index]) +
-                        header.offset_in_segment;
-            msg->copy_to(dst, header.payload_size, sizeof(StreamChunkHeader));
-
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (results_[header.segment_index] >= 0) {
-                results_[header.segment_index] +=
-                    static_cast<int32_t>(header.payload_size);
+                if (results_[header.segment_index] >= 0) {
+                    results_[header.segment_index] +=
+                        static_cast<int32_t>(header.payload_size);
+                }
             }
         }
         return 0;
@@ -141,7 +152,9 @@ Status StoreRpcClient::Connect(const std::string& addr,
                                uint64_t max_body_size_bytes,
                                uint32_t max_parallel_sub_batches,
                                bool stream_read_enabled,
-                               uint32_t stream_read_chunk_size_bytes) {
+                               uint32_t stream_read_chunk_size_bytes,
+                               uint32_t stream_read_prefetch_chunks,
+                               uint32_t stream_read_queue_chunks) {
     if (addr.empty()) {
         LOG(ERROR) << "[StoreRpcClient] Connect: empty store address";
         return Status::InvalidArg("empty store address");
@@ -151,6 +164,8 @@ Status StoreRpcClient::Connect(const std::string& addr,
     max_parallel_sub_batches_ = std::max<uint32_t>(1, max_parallel_sub_batches);
     stream_read_enabled_ = stream_read_enabled;
     stream_read_chunk_size_bytes_ = std::max<uint32_t>(1, stream_read_chunk_size_bytes);
+    stream_read_prefetch_chunks_ = std::max<uint32_t>(1, stream_read_prefetch_chunks);
+    stream_read_queue_chunks_ = std::max<uint32_t>(1, stream_read_queue_chunks);
 
     brpc::ChannelOptions options;
     options.connect_timeout_ms = 3000;
@@ -233,13 +248,16 @@ Status StoreRpcClient::BatchReadStream(const std::vector<uint64_t>& offsets,
         request.set_source_node_addr(source_node_addr);
     }
     request.set_chunk_size_bytes(stream_read_chunk_size_bytes_);
+    request.set_prefetch_chunks(stream_read_prefetch_chunks_);
+    request.set_queue_chunks(stream_read_queue_chunks_);
 
     BatchReadStreamResponse response;
     brpc::Controller cntl;
     BatchReadStreamHandler handler(sizes, buffers, results);
 
     brpc::StreamOptions stream_options;
-    stream_options.max_buf_size = 32 * 1024 * 1024;
+    stream_options.max_buf_size = std::max<size_t>(32 * 1024 * 1024,
+                                                   stream_read_chunk_size_bytes_ * 2ULL);
     stream_options.handler = &handler;
 
     brpc::StreamId stream_id = brpc::INVALID_STREAM_ID;

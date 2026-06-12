@@ -1,0 +1,71 @@
+{
+  "test": {
+    "duration_sec": 10,
+    "batch_size": 128,
+    "value_size": 1048576,
+    "warmup_sec": 2,
+    "warmup_batches": 400,
+    "meta_listen_port": 18900,
+    "scheduler_uds_path": "/tmp/falconkv_perf/cross_node_stream_off_50g/falconkv_perf_sched.sock",
+    "result_dir": "/tmp/falconkv_perf/cross_node_stream_off_50g/result",
+    "writer_warmup_only": true,
+    "writer_hold_after_sec": 3
+  },
+  "meta": {
+    "shard_count": 16
+  },
+  "scheduler": {
+    "schedule_policy": "passthrough",
+    "enabled": true
+  },
+  "clients": [
+    {
+      "client_id": "A",
+      "node_id": 1,
+      "store_id": 1,
+      "listen_port": 18901,
+      "ssd_path": "/tmp/falconkv_perf/cross_node_stream_off_50g/ssd/A",
+      "capacity_gb": 64,
+      "cache_capacity": 100000,
+      "io_threads": 8,
+      "store_rpc_host": "127.0.0.1",
+      "evict_grace_period_ms": 5000,
+      "evict_check_interval_sec": 60,
+      "evict_high_watermark": 0.95,
+      "evict_low_watermark": 0.85,
+      "slot_size_bytes": 0,
+      "io_uring_enabled": false,
+      "io_uring_queue_depth": 256
+    },
+    {
+      "client_id": "C",
+      "node_id": 2,
+      "store_id": 3,
+      "listen_port": 18923,
+      "ssd_path": "/tmp/falconkv_perf/cross_node_stream_off_50g/ssd/C",
+      "capacity_gb": 64,
+      "cache_capacity": 100000,
+      "io_threads": 8,
+      "store_rpc_host": "127.0.0.1",
+      "evict_grace_period_ms": 5000,
+      "evict_check_interval_sec": 60,
+      "evict_high_watermark": 0.95,
+      "evict_low_watermark": 0.85,
+      "slot_size_bytes": 0,
+      "io_uring_enabled": false,
+      "io_uring_queue_depth": 256
+    }
+  ],
+  "transfer": {
+    "meta_addr": "127.0.0.1:18900",
+    "store_pool_size": 4,
+    "rpc_timeout_ms": 5000,
+    "connect_timeout_ms": 3000,
+    "max_retry": 3,
+    "max_body_size_mb": 128,
+    "remote_read_stream_enabled": false,
+    "remote_read_chunk_size_mb": 16,
+    "remote_read_prefetch_chunks": 4,
+    "remote_read_queue_chunks": 4
+  }
+}

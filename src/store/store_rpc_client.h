@@ -29,7 +29,9 @@ public:
                    uint64_t max_body_size_bytes = 512ULL * 1024 * 1024,
                    uint32_t max_parallel_sub_batches = 4,
                    bool stream_read_enabled = true,
-                   uint32_t stream_read_chunk_size_bytes = 16 * 1024 * 1024);
+                   uint32_t stream_read_chunk_size_bytes = 16 * 1024 * 1024,
+                   uint32_t stream_read_prefetch_chunks = 4,
+                   uint32_t stream_read_queue_chunks = 4);
 
     /// Whether the client is connected.
     bool IsConnected() const { return connected_; }
@@ -71,6 +73,8 @@ private:
     uint32_t max_parallel_sub_batches_ = 4;
     bool stream_read_enabled_ = true;
     uint32_t stream_read_chunk_size_bytes_ = 16 * 1024 * 1024;
+    uint32_t stream_read_prefetch_chunks_ = 4;
+    uint32_t stream_read_queue_chunks_ = 4;
 };
 
 } // namespace falconkv

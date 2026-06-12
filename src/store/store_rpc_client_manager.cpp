@@ -27,7 +27,9 @@ StoreRpcClient* StoreRpcClientManager::GetOrCreate(const std::string& addr) {
     Status s = client->Connect(addr, max_body_size_bytes_,
                                max_parallel_sub_batches_,
                                stream_read_enabled_,
-                               stream_read_chunk_size_bytes_);
+                               stream_read_chunk_size_bytes_,
+                               stream_read_prefetch_chunks_,
+                               stream_read_queue_chunks_);
     if (!s.ok()) {
         return nullptr;
     }
@@ -48,9 +50,13 @@ void StoreRpcClientManager::SetMaxParallelSubBatches(
 }
 
 void StoreRpcClientManager::SetStreamReadConfig(bool enabled,
-                                                uint32_t chunk_size_bytes) {
+                                                uint32_t chunk_size_bytes,
+                                                uint32_t prefetch_chunks,
+                                                uint32_t queue_chunks) {
     stream_read_enabled_ = enabled;
     stream_read_chunk_size_bytes_ = std::max<uint32_t>(1, chunk_size_bytes);
+    stream_read_prefetch_chunks_ = std::max<uint32_t>(1, prefetch_chunks);
+    stream_read_queue_chunks_ = std::max<uint32_t>(1, queue_chunks);
 }
 
 void StoreRpcClientManager::CloseAll() {

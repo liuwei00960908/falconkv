@@ -46,6 +46,8 @@ message BatchReadStreamRequest {
     repeated BatchReadSegment segments = 1;
     optional string source_node_addr = 2;
     optional uint32 chunk_size_bytes = 3;
+    optional uint32 prefetch_chunks = 4;
+    optional uint32 queue_chunks = 5;
 }
 
 message BatchReadStreamResponse {

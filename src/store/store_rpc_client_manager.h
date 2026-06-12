@@ -33,7 +33,9 @@ public:
     void SetMaxParallelSubBatches(uint32_t max_parallel_sub_batches);
 
     /// Configure streaming remote reads for future connections.
-    void SetStreamReadConfig(bool enabled, uint32_t chunk_size_bytes);
+    void SetStreamReadConfig(bool enabled, uint32_t chunk_size_bytes,
+                             uint32_t prefetch_chunks,
+                             uint32_t queue_chunks);
 
 private:
     std::mutex mutex_;
@@ -42,6 +44,8 @@ private:
     uint32_t max_parallel_sub_batches_ = 4;
     bool stream_read_enabled_ = true;
     uint32_t stream_read_chunk_size_bytes_ = 16 * 1024 * 1024;
+    uint32_t stream_read_prefetch_chunks_ = 4;
+    uint32_t stream_read_queue_chunks_ = 4;
 };
 
 } // namespace falconkv

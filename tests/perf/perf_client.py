@@ -86,7 +86,8 @@ def _find_client_config(config: dict, client_id: str) -> dict:
 def _write_falconkv_config(client_cfg: dict, test_cfg: dict, config: dict,
                            ssd_path: str) -> str:
     """Generate a FalconKV JSON config file and return its path."""
-    meta_addr = config["transfer"]["meta_addr"]
+    transfer_cfg = config["transfer"]
+    meta_addr = transfer_cfg["meta_addr"]
     scheduler_enabled = config["scheduler"].get("enabled", False)
     scheduler_uds = test_cfg.get("scheduler_uds_path",
                                   "/tmp/falconkv_perf_sched.sock")
@@ -117,6 +118,22 @@ def _write_falconkv_config(client_cfg: dict, test_cfg: dict, config: dict,
         },
         "client": {
             "cache_capacity": client_cfg.get("cache_capacity", 100000),
+        },
+        "transfer": {
+            "meta_addr": meta_addr,
+            "store_pool_size": transfer_cfg.get("store_pool_size", 4),
+            "rpc_timeout_ms": transfer_cfg.get("rpc_timeout_ms", 5000),
+            "connect_timeout_ms": transfer_cfg.get("connect_timeout_ms", 3000),
+            "max_retry": transfer_cfg.get("max_retry", 3),
+            "max_body_size_mb": transfer_cfg.get("max_body_size_mb", 512),
+            "remote_read_stream_enabled": transfer_cfg.get(
+                "remote_read_stream_enabled", True),
+            "remote_read_chunk_size_mb": transfer_cfg.get(
+                "remote_read_chunk_size_mb", 16),
+            "remote_read_prefetch_chunks": transfer_cfg.get(
+                "remote_read_prefetch_chunks", 4),
+            "remote_read_queue_chunks": transfer_cfg.get(
+                "remote_read_queue_chunks", 4),
         },
     }
     os.makedirs(ssd_path, exist_ok=True)
@@ -247,6 +264,7 @@ def run_benchmark(config: dict, client_id: str):
     batch_size = test_cfg.get("batch_size", 16)
     value_size = test_cfg.get("value_size", 4096)
     warmup_sec = test_cfg.get("warmup_sec", 10)
+    warmup_batches_limit = test_cfg.get("warmup_batches", 0)
     duration_sec = test_cfg.get("duration_sec", 30)
     capacity_gb = client_cfg.get("capacity_gb", 8)
     writer_warmup_only = test_cfg.get("writer_warmup_only", False)
@@ -269,12 +287,17 @@ def run_benchmark(config: dict, client_id: str):
     if role == "writer":
         # Client A writes continuously to populate data for B/C to read.
         # Pre-allocate write buffer once, reuse for entire warmup + bench.
-        print(f"[A] Warmup: writing initial data for {warmup_sec}s ...")
+        if warmup_batches_limit > 0:
+            print(f"[A] Warmup: writing {warmup_batches_limit} batches ...")
+        else:
+            print(f"[A] Warmup: writing initial data for {warmup_sec}s ...")
         write_data = os.urandom(value_size)
         write_guard = BufferGuard(write_data)
         warmup_end = time.time() + warmup_sec
 
-        while time.time() < warmup_end:
+        while ((warmup_batches_limit > 0 and
+                warmup_batch_count < warmup_batches_limit) or
+               (warmup_batches_limit <= 0 and time.time() < warmup_end)):
             keys = _warmup_keys(warmup_batch_count, batch_size)
             client.batch_put_sync(
                 keys,
@@ -447,6 +470,16 @@ def run_benchmark(config: dict, client_id: str):
         "config": {
             "batch_size": batch_size,
             "value_size": value_size,
+            "remote_read_stream_enabled": config["transfer"].get(
+                "remote_read_stream_enabled", True),
+            "remote_read_chunk_size_mb": config["transfer"].get(
+                "remote_read_chunk_size_mb", 16),
+            "remote_read_prefetch_chunks": config["transfer"].get(
+                "remote_read_prefetch_chunks", 4),
+            "remote_read_queue_chunks": config["transfer"].get(
+                "remote_read_queue_chunks", 4),
+            "max_body_size_mb": config["transfer"].get("max_body_size_mb", 512),
+            "store_pool_size": config["transfer"].get("store_pool_size", 4),
         },
         "exist": _compute_stats(exist_latencies, elapsed, 0),
         "put": _compute_stats(put_latencies, elapsed, put_bytes),

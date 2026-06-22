@@ -1,5 +1,7 @@
 #include "src/store/hixl_buffer_pool.h"
 
+#include <limits>
+
 #include "src/common/aligned_allocator.h"
 
 #ifdef FALCONKV_HAS_HIXL
@@ -23,8 +25,12 @@ Status HixlBufferPool::Init(size_t chunk_size, size_t chunk_count,
     if (transport->mem_type() != "host") {
         return Status::NotSupported("FalconKV HiXL buffer pool only supports host memory");
     }
+    if (chunk_count > std::numeric_limits<size_t>::max() / chunk_size) {
+        return Status::InvalidArg("HiXL buffer pool size overflow");
+    }
     Close();
     chunk_size_ = chunk_size;
+    total_size_ = chunk_size * chunk_count;
     alignment_ = alignment == 0 ? 4096 : alignment;
     transport_ = transport;
     chunks_.resize(chunk_count);
@@ -32,31 +38,35 @@ Status HixlBufferPool::Init(size_t chunk_size, size_t chunk_count,
     bool use_acl_host = transport_->mem_type() == "host";
 #endif
 
-    for (auto& chunk : chunks_) {
 #ifdef FALCONKV_HAS_HIXL
-        if (use_acl_host) {
-            aclError acl_rc = aclrtMallocHost(&chunk.addr, chunk_size_);
-            if (acl_rc != ACL_ERROR_NONE) {
-                Close();
-                return Status::NoSpace("aclrtMallocHost failed: " +
-                                       std::to_string(acl_rc));
-            }
-            chunk.acl_host_allocated = true;
-        } else
+    if (use_acl_host) {
+        aclError acl_rc = aclrtMallocHost(&base_addr_, total_size_);
+        if (acl_rc != ACL_ERROR_NONE) {
+            Close();
+            return Status::NoSpace("aclrtMallocHost failed: " +
+                                   std::to_string(acl_rc));
+        }
+        acl_host_allocated_ = true;
+    } else
 #endif
-        {
-            chunk.addr = AlignedAllocator::Allocate(alignment_, chunk_size_);
-        }
-        if (!chunk.addr) {
-            Close();
-            return Status::NoSpace("failed to allocate HiXL buffer pool chunk");
-        }
-        Status s = transport_->RegisterMemory(chunk.addr, chunk_size_,
-                                              &chunk.mem_handle);
-        if (!s.ok()) {
-            Close();
-            return s;
-        }
+    {
+        base_addr_ = AlignedAllocator::Allocate(alignment_, total_size_);
+    }
+    if (!base_addr_) {
+        Close();
+        return Status::NoSpace("failed to allocate HiXL buffer pool");
+    }
+
+    Status s = transport_->RegisterMemory(base_addr_, total_size_,
+                                          &mem_handle_);
+    if (!s.ok()) {
+        Close();
+        return s;
+    }
+
+    auto* base = static_cast<unsigned char*>(base_addr_);
+    for (size_t i = 0; i < chunks_.size(); ++i) {
+        chunks_[i].addr = base + i * chunk_size_;
     }
     return Status::OK();
 }
@@ -90,23 +100,25 @@ void HixlBufferPool::Release(const Lease& lease) {
 
 void HixlBufferPool::Close() {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& chunk : chunks_) {
-        if (transport_ && chunk.mem_handle) {
-            transport_->DeregisterMemory(chunk.mem_handle);
-        }
-        if (chunk.addr) {
+    if (transport_ && mem_handle_) {
+        transport_->DeregisterMemory(mem_handle_);
+    }
+    if (base_addr_) {
 #ifdef FALCONKV_HAS_HIXL
-            if (chunk.acl_host_allocated) {
-                aclrtFreeHost(chunk.addr);
-            } else
+        if (acl_host_allocated_) {
+            aclrtFreeHost(base_addr_);
+        } else
 #endif
-            {
-                AlignedAllocator::Free(chunk.addr);
-            }
+        {
+            AlignedAllocator::Free(base_addr_);
         }
     }
     chunks_.clear();
+    base_addr_ = nullptr;
+    mem_handle_ = nullptr;
+    acl_host_allocated_ = false;
     chunk_size_ = 0;
+    total_size_ = 0;
     transport_ = nullptr;
 }
 

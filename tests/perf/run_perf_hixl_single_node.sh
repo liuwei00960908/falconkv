@@ -366,9 +366,19 @@ PY
         grep_log_files "falling back to brpc" || true
         die "HiXL fell back to brpc"
     fi
+    if grep_log_files "HiXL remote read disabled|HiXL RegisterMem failed" >/dev/null 2>&1; then
+        grep_log_files "HiXL remote read disabled|HiXL RegisterMem failed" || true
+        die "HiXL remote read was disabled"
+    fi
 
     if ! grep_log_files "HiXL|Hixl|PrepareHixl|TransferSync" >/dev/null 2>&1; then
         die "No HiXL-related log lines found"
+    fi
+    if ! grep_log_files "HiXL remote read enabled, engine=${A_STORE_HIXL}" >/dev/null 2>&1; then
+        die "Writer store HiXL remote read was not enabled"
+    fi
+    if ! grep_log_files "Initialized local_engine=${C_CLIENT_HIXL}" >/dev/null 2>&1; then
+        die "Reader client HiXL transport was not initialized"
     fi
 }
 

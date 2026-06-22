@@ -34,14 +34,16 @@ public:
 private:
     struct Chunk {
         void* addr = nullptr;
-        void* mem_handle = nullptr;
-        bool acl_host_allocated = false;
         bool in_use = false;
     };
 
     std::mutex mutex_;
     std::vector<Chunk> chunks_;
+    void* base_addr_ = nullptr;
+    void* mem_handle_ = nullptr;
+    bool acl_host_allocated_ = false;
     size_t chunk_size_ = 0;
+    size_t total_size_ = 0;
     size_t alignment_ = 4096;
     HixlTransport* transport_ = nullptr;
 };

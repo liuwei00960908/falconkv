@@ -62,6 +62,7 @@ void KeyDescCache::Insert(const std::string& key, const KeyDescriptor& desc) {
         existing.size = desc.size;
         existing.access_time_ms = desc.access_time_ms;
         existing.store_addr = desc.store_addr;
+        existing.hixl_engine_addr = desc.hixl_engine_addr;
         existing.access_type = desc.access_type;
         lru_list_.splice(lru_list_.end(), lru_list_, it->second);
     } else {
@@ -74,6 +75,7 @@ void KeyDescCache::Insert(const std::string& key, const KeyDescriptor& desc) {
         list_it->size = desc.size;
         list_it->access_time_ms = desc.access_time_ms;
         list_it->store_addr = desc.store_addr;
+        list_it->hixl_engine_addr = desc.hixl_engine_addr;
         list_it->access_type = desc.access_type;
         cache_.emplace(std::string_view(list_it->key), list_it);
     }
@@ -92,6 +94,7 @@ void KeyDescCache::BatchInsert(
             existing.size = desc.size;
             existing.access_time_ms = desc.access_time_ms;
             existing.store_addr = desc.store_addr;
+            existing.hixl_engine_addr = desc.hixl_engine_addr;
             existing.access_type = desc.access_type;
             lru_list_.splice(lru_list_.end(), lru_list_, it->second);
         } else {
@@ -103,6 +106,7 @@ void KeyDescCache::BatchInsert(
             list_it->size = desc.size;
             list_it->access_time_ms = desc.access_time_ms;
             list_it->store_addr = desc.store_addr;
+            list_it->hixl_engine_addr = desc.hixl_engine_addr;
             list_it->access_type = desc.access_type;
             cache_.emplace(std::string_view(list_it->key), list_it);
         }

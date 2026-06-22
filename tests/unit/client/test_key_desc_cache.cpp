@@ -37,6 +37,24 @@ TEST(KeyDescCache, LookupHit) {
     EXPECT_EQ(result->size, 100u);
 }
 
+TEST(KeyDescCache, PreservesHixlEngineAddrOnInsertAndUpdate) {
+    KeyDescCache cache(100);
+    auto desc = MakeDesc("key1", 1, 0, 100);
+    desc.hixl_engine_addr = "7.150.5.81:16000";
+    cache.Insert("key1", desc);
+
+    auto result = cache.Lookup("key1");
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->hixl_engine_addr, "7.150.5.81:16000");
+
+    desc.hixl_engine_addr = "7.150.5.81:16001";
+    cache.Insert("key1", desc);
+
+    auto updated = cache.Lookup("key1");
+    ASSERT_TRUE(updated.has_value());
+    EXPECT_EQ(updated->hixl_engine_addr, "7.150.5.81:16001");
+}
+
 TEST(KeyDescCache, LookupMiss) {
     KeyDescCache cache(100);
     auto result = cache.Lookup("nonexistent");
@@ -115,6 +133,27 @@ TEST(KeyDescCache, BatchInsertAndVerify) {
         EXPECT_EQ(result->store_id, static_cast<uint32_t>(i));
         EXPECT_EQ(result->offset, static_cast<uint64_t>(i) * 4096);
     }
+}
+
+TEST(KeyDescCache, BatchInsertPreservesHixlEngineAddr) {
+    KeyDescCache cache(100);
+
+    auto first = MakeDesc("k1", 1, 0, 4096);
+    first.hixl_engine_addr = "7.150.5.81:16000";
+    auto second = MakeDesc("k2", 2, 4096, 4096);
+    second.hixl_engine_addr = "7.150.5.81:16001";
+    cache.BatchInsert({{"k1", first}, {"k2", second}});
+
+    auto result = cache.Lookup("k1");
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->hixl_engine_addr, "7.150.5.81:16000");
+
+    first.hixl_engine_addr = "7.150.5.81:17000";
+    cache.BatchInsert({{"k1", first}});
+
+    auto updated = cache.Lookup("k1");
+    ASSERT_TRUE(updated.has_value());
+    EXPECT_EQ(updated->hixl_engine_addr, "7.150.5.81:17000");
 }
 
 // ---------------------------------------------------------------------------

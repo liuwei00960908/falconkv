@@ -177,6 +177,10 @@ int FalconKVClientImpl::BatchExist(const std::vector<std::string>& keys,
     // Step 2: For keys still missing, query remote Meta
     if (!missing_keys.empty()) {
         auto records = meta_client_.BatchExist(missing_keys);
+        size_t remote_desc_count = 0;
+        size_t remote_desc_missing_hixl = 0;
+        std::string first_remote_store_addr;
+        std::string first_remote_hixl_engine_addr;
         for (size_t i = 0; i < records.size(); ++i) {
             if (!records[i].key.empty() && records[i].stat == 1) {
                 KeyDescriptor desc(records[i].key);
@@ -201,9 +205,26 @@ int FalconKVClientImpl::BatchExist(const std::vector<std::string>& keys,
                     desc.store_addr = records[i].store_addr;
                 }
                 desc.hixl_engine_addr = records[i].hixl_engine_addr;
+                if (desc.access_type == AccessType::ACCESS_REMOTE_RPC) {
+                    ++remote_desc_count;
+                    if (first_remote_store_addr.empty()) {
+                        first_remote_store_addr = desc.store_addr;
+                        first_remote_hixl_engine_addr = desc.hixl_engine_addr;
+                    }
+                    if (desc.hixl_engine_addr.empty()) {
+                        ++remote_desc_missing_hixl;
+                    }
+                }
                 hit_descs.push_back(desc);
                 key_desc_cache_.Insert(records[i].key, desc);
             }
+        }
+        if (remote_desc_count > 0) {
+            LOG(INFO) << "[FalconKVClient] BatchExist remote desc summary: count="
+                      << remote_desc_count << ", missing_hixl="
+                      << remote_desc_missing_hixl << ", first_store_addr="
+                      << first_remote_store_addr << ", first_hixl_engine_addr="
+                      << first_remote_hixl_engine_addr;
         }
     }
 
@@ -551,6 +572,10 @@ std::vector<int32_t> FalconKVClientImpl::BatchGetSync(
     // Step 2: For missing keys, query remote MetaManager
     if (!missing_keys.empty()) {
         auto records = meta_client_.BatchLookup(missing_keys);
+        size_t remote_desc_count = 0;
+        size_t remote_desc_missing_hixl = 0;
+        std::string first_remote_store_addr;
+        std::string first_remote_hixl_engine_addr;
         for (size_t i = 0; i < records.size(); ++i) {
             if (!records[i].key.empty()) {
                 KeyDescriptor desc(records[i].key);
@@ -575,9 +600,26 @@ std::vector<int32_t> FalconKVClientImpl::BatchGetSync(
                     desc.store_addr = records[i].store_addr;
                 }
                 desc.hixl_engine_addr = records[i].hixl_engine_addr;
+                if (desc.access_type == AccessType::ACCESS_REMOTE_RPC) {
+                    ++remote_desc_count;
+                    if (first_remote_store_addr.empty()) {
+                        first_remote_store_addr = desc.store_addr;
+                        first_remote_hixl_engine_addr = desc.hixl_engine_addr;
+                    }
+                    if (desc.hixl_engine_addr.empty()) {
+                        ++remote_desc_missing_hixl;
+                    }
+                }
                 hit_map.emplace(records[i].key, desc);
                 key_desc_cache_.Insert(records[i].key, desc);
             }
+        }
+        if (remote_desc_count > 0) {
+            LOG(INFO) << "[FalconKVClient] BatchLookup remote desc summary: count="
+                      << remote_desc_count << ", missing_hixl="
+                      << remote_desc_missing_hixl << ", first_store_addr="
+                      << first_remote_store_addr << ", first_hixl_engine_addr="
+                      << first_remote_hixl_engine_addr;
         }
     }
 

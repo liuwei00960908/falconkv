@@ -59,7 +59,8 @@ Status MetaManager::RegisterStore(const StoreInfo& info) {
     std::unique_lock<std::shared_mutex> lock(stores_rwlock_);
     stores_[info.store_id] = info;
     LOG(INFO) << "[MetaManager] RegisterStore: store_id=" << info.store_id
-              << ", node_id=" << info.node_id << ", addr=" << info.store_addr;
+              << ", node_id=" << info.node_id << ", addr=" << info.store_addr
+              << ", hixl_engine_addr=" << info.hixl_engine_addr;
     return Status::OK();
 }
 

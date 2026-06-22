@@ -291,7 +291,8 @@ Status MetaSyncClient::RegisterStore(uint32_t store_id, uint32_t node_id,
     }
 
     LOG(INFO) << "[MetaSyncClient] RegisterStore succeeded: store_id=" << store_id
-              << ", node_id=" << node_id << ", data_file=" << data_file;
+              << ", node_id=" << node_id << ", data_file=" << data_file
+              << ", hixl_engine_addr=" << hixl_engine_addr;
     return Status::OK();
 }
 

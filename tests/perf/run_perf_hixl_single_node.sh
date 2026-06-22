@@ -262,7 +262,11 @@ write_perf_config() {
       "store_rpc_host": "127.0.0.1",
       "slot_size_bytes": 0,
       "io_uring_enabled": false,
-      "io_uring_queue_depth": ${IO_URING_QUEUE_DEPTH}
+      "io_uring_queue_depth": ${IO_URING_QUEUE_DEPTH},
+      "store_hixl_engine_addr": "${A_STORE_HIXL}",
+      "store_hixl_device_id": ${A_STORE_DEVICE},
+      "client_hixl_engine_addr": "${A_CLIENT_HIXL}",
+      "client_hixl_device_id": ${A_CLIENT_DEVICE}
     },
     {
       "client_id": "C",
@@ -276,7 +280,11 @@ write_perf_config() {
       "store_rpc_host": "127.0.0.1",
       "slot_size_bytes": 0,
       "io_uring_enabled": false,
-      "io_uring_queue_depth": ${IO_URING_QUEUE_DEPTH}
+      "io_uring_queue_depth": ${IO_URING_QUEUE_DEPTH},
+      "store_hixl_engine_addr": "${C_STORE_HIXL}",
+      "store_hixl_device_id": ${C_STORE_DEVICE},
+      "client_hixl_engine_addr": "${C_CLIENT_HIXL}",
+      "client_hixl_device_id": ${C_CLIENT_DEVICE}
     }
   ],
   "transfer": {
@@ -289,7 +297,19 @@ write_perf_config() {
     "remote_read_stream_enabled": true,
     "remote_read_chunk_size_mb": ${REMOTE_READ_CHUNK_SIZE_MB},
     "remote_read_prefetch_chunks": ${REMOTE_READ_PREFETCH_CHUNKS},
-    "remote_read_queue_chunks": ${REMOTE_READ_QUEUE_CHUNKS}
+    "remote_read_queue_chunks": ${REMOTE_READ_QUEUE_CHUNKS},
+    "remote_read_transport": "hixl",
+    "hixl_protocol_desc": "",
+    "hixl_local_comm_res": "",
+    "hixl_mem_type": "host",
+    "hixl_staging_chunk_size_mb": ${HIXL_STAGING_CHUNK_SIZE_MB},
+    "hixl_staging_chunk_count": ${HIXL_STAGING_CHUNK_COUNT},
+    "hixl_receive_chunk_size_mb": ${HIXL_RECEIVE_CHUNK_SIZE_MB},
+    "hixl_receive_chunk_count": ${HIXL_RECEIVE_CHUNK_COUNT},
+    "hixl_transfer_timeout_ms": 5000,
+    "hixl_connect_timeout_ms": 5000,
+    "hixl_min_read_size_bytes": 1,
+    "hixl_fallback_to_brpc": false
   }
 }
 EOF
@@ -379,6 +399,9 @@ PY
     fi
     if ! grep_log_files "Initialized local_engine=${C_CLIENT_HIXL}" >/dev/null 2>&1; then
         die "Reader client HiXL transport was not initialized"
+    fi
+    if ! grep_log_files "HiXL BatchRead succeeded|PrepareHixlBatchRead|HiXL TransferSync READ" >/dev/null 2>&1; then
+        die "Reader did not execute a HiXL batch read"
     fi
 }
 

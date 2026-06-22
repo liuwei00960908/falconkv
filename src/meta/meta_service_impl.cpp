@@ -108,7 +108,8 @@ void MetaServiceImpl::StoreRegister(::google::protobuf::RpcController*,
     Status status = meta_manager_->RegisterStore(info);
     if (status.ok()) {
         LOG(INFO) << "[MetaServiceImpl] StoreRegister: store_id=" << info.store_id
-                  << ", node_id=" << info.node_id << ", addr=" << info.store_addr;
+                  << ", node_id=" << info.node_id << ", addr=" << info.store_addr
+                  << ", hixl_engine_addr=" << info.hixl_engine_addr;
     }
     response->set_status(status.ok() ? 0 : static_cast<int>(status.code()));
     if (!status.ok()) {

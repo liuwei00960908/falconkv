@@ -163,6 +163,11 @@ void StoreRpcClient::SetHixlReadConfig(bool enabled,
     hixl_min_read_size_bytes_ = min_read_size_bytes;
     hixl_transfer_timeout_ms_ = std::max<uint32_t>(1, transfer_timeout_ms);
     hixl_fallback_to_brpc_ = fallback_to_brpc;
+    LOG(INFO) << "[StoreRpcClient] HiXL read config: enabled=" << hixl_read_enabled_
+              << ", local_engine=" << hixl_transport_config_.local_engine
+              << ", mem_type=" << hixl_transport_config_.mem_type
+              << ", min_read_size=" << hixl_min_read_size_bytes_
+              << ", fallback_to_brpc=" << hixl_fallback_to_brpc_;
 }
 
 Status StoreRpcClient::Connect(const std::string& addr,
@@ -327,19 +332,35 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
         total_read_size += size;
     }
 
-    if (hixl_read_enabled_ && !hixl_engine_addr.empty() &&
-        total_read_size >= hixl_min_read_size_bytes_) {
-        Status hixl_status = BatchReadHixl(offsets, sizes, buffers, results,
-                                           source_node_addr, hixl_engine_addr);
-        if (hixl_status.ok()) {
-            return Status::OK();
+    if (hixl_read_enabled_ && total_read_size >= hixl_min_read_size_bytes_) {
+        if (hixl_engine_addr.empty()) {
+            Status missing_engine = Status::InvalidArg(
+                "HiXL remote read enabled but remote engine address is empty");
+            if (!hixl_fallback_to_brpc_) {
+                LOG(ERROR) << "[StoreRpcClient] " << missing_engine.ToString();
+                return missing_engine;
+            }
+            LOG(WARNING) << "[StoreRpcClient] " << missing_engine.ToString()
+                         << ", falling back to brpc";
+        } else {
+            LOG(INFO) << "[StoreRpcClient] Trying HiXL BatchRead: remote_engine="
+                      << hixl_engine_addr << ", total_read_size="
+                      << total_read_size << ", segments=" << n;
+            Status hixl_status = BatchReadHixl(offsets, sizes, buffers, results,
+                                               source_node_addr, hixl_engine_addr);
+            if (hixl_status.ok()) {
+                LOG(INFO) << "[StoreRpcClient] HiXL BatchRead succeeded: remote_engine="
+                          << hixl_engine_addr << ", total_read_size="
+                          << total_read_size << ", segments=" << n;
+                return Status::OK();
+            }
+            if (!hixl_fallback_to_brpc_) {
+                return hixl_status;
+            }
+            LOG(WARNING) << "[StoreRpcClient] HiXL BatchRead failed, falling back to brpc: "
+                         << hixl_status.ToString();
+            results.assign(n, 0);
         }
-        if (!hixl_fallback_to_brpc_) {
-            return hixl_status;
-        }
-        LOG(WARNING) << "[StoreRpcClient] HiXL BatchRead failed, falling back to brpc: "
-                     << hixl_status.ToString();
-        results.assign(n, 0);
     }
 
     if (stream_read_enabled_) {
@@ -513,6 +534,8 @@ Status StoreRpcClient::BatchReadHixl(const std::vector<uint64_t>& offsets,
 
     PrepareHixlBatchReadResponse response;
     brpc::Controller cntl;
+    LOG(INFO) << "[StoreRpcClient] PrepareHixlBatchRead: segments="
+              << offsets.size() << ", remote_engine=" << hixl_engine_addr;
     stub_->PrepareHixlBatchRead(&cntl, &request, &response, nullptr);
     if (cntl.Failed()) {
         return Status::RpcError("PrepareHixlBatchRead RPC failed: " +
@@ -580,6 +603,8 @@ Status StoreRpcClient::BatchReadHixl(const std::vector<uint64_t>& offsets,
                                 !response.remote_engine().empty()
         ? response.remote_engine()
         : hixl_engine_addr;
+    LOG(INFO) << "[StoreRpcClient] HiXL TransferSync READ: remote_engine="
+              << remote_engine << ", ops=" << ops.size();
     Status s = hixl_transport_->Connect(remote_engine);
     if (s.ok()) {
         s = hixl_transport_->Read(remote_engine, ops, hixl_transfer_timeout_ms_);

@@ -38,6 +38,16 @@ public:
                        BatchGetByKeyResponse* response,
                        ::google::protobuf::Closure* done) override;
 
+    void PrepareHixlBatchRead(::google::protobuf::RpcController* controller,
+                              const PrepareHixlBatchReadRequest* request,
+                              PrepareHixlBatchReadResponse* response,
+                              ::google::protobuf::Closure* done) override;
+
+    void ReleaseHixlReadToken(::google::protobuf::RpcController* controller,
+                              const ReleaseHixlReadTokenRequest* request,
+                              ReleaseHixlReadTokenResponse* response,
+                              ::google::protobuf::Closure* done) override;
+
     void Ping(::google::protobuf::RpcController* controller,
               const PingRequest* request,
               PongResponse* response,

@@ -8,6 +8,8 @@ add_library(falconkv_store STATIC
     store_service_impl.cpp
     store_rpc_client.cpp
     store_rpc_client_manager.cpp
+    hixl_transport.cpp
+    hixl_buffer_pool.cpp
     store_server.cpp
     store_meta_index.cpp
     meta_sync_client.cpp
@@ -35,4 +37,9 @@ if(FALCONKV_HAS_IOURING)
     target_compile_definitions(falconkv_store PUBLIC FALCONKV_HAS_IOURING)
     target_include_directories(falconkv_store PUBLIC ${LIBURING_INCLUDE_DIR})
     target_link_libraries(falconkv_store PUBLIC ${LIBURING_LIBRARY})
+endif()
+
+if(FALCONKV_HAS_HIXL)
+    target_compile_definitions(falconkv_store PUBLIC FALCONKV_HAS_HIXL)
+    target_link_libraries(falconkv_store PUBLIC falconkv_hixl_deps)
 endif()

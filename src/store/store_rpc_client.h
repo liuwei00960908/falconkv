@@ -3,11 +3,14 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
 
 #include <brpc/channel.h>
 
 #include "falconkv_store.pb.h"
 #include "src/common/status.h"
+#include "src/store/hixl_buffer_pool.h"
+#include "src/store/hixl_transport.h"
 
 namespace falconkv {
 
@@ -33,6 +36,15 @@ public:
                    uint32_t stream_read_prefetch_chunks = 4,
                    uint32_t stream_read_queue_chunks = 4);
 
+    /// Configure optional HiXL remote-read probing. BRPC remains the fallback.
+    void SetHixlReadConfig(bool enabled,
+                           const HixlTransportConfig& transport_config,
+                           uint32_t receive_chunk_size_mb,
+                           uint32_t receive_chunk_count,
+                           uint32_t min_read_size_bytes,
+                           uint32_t transfer_timeout_ms,
+                           bool fallback_to_brpc);
+
     /// Whether the client is connected.
     bool IsConnected() const { return connected_; }
 
@@ -54,17 +66,26 @@ public:
                      const std::vector<uint32_t>& sizes,
                      const std::vector<void*>& buffers,
                      std::vector<int32_t>& results,
-                     const std::string& source_node_addr = "");
+                     const std::string& source_node_addr = "",
+                     const std::string& hixl_engine_addr = "");
 
     /// Ping the remote store.
     Status Ping();
 
 private:
     Status BatchReadStream(const std::vector<uint64_t>& offsets,
-                           const std::vector<uint32_t>& sizes,
-                           const std::vector<void*>& buffers,
-                           std::vector<int32_t>& results,
-                           const std::string& source_node_addr);
+                            const std::vector<uint32_t>& sizes,
+                            const std::vector<void*>& buffers,
+                            std::vector<int32_t>& results,
+                            const std::string& source_node_addr);
+
+    Status BatchReadHixl(const std::vector<uint64_t>& offsets,
+                         const std::vector<uint32_t>& sizes,
+                         const std::vector<void*>& buffers,
+                         std::vector<int32_t>& results,
+                         const std::string& source_node_addr,
+                         const std::string& hixl_engine_addr);
+    Status EnsureHixlReceivePool();
 
     brpc::Channel channel_;
     std::unique_ptr<FalconKVStoreService_Stub> stub_;
@@ -75,6 +96,16 @@ private:
     uint32_t stream_read_chunk_size_bytes_ = 16 * 1024 * 1024;
     uint32_t stream_read_prefetch_chunks_ = 4;
     uint32_t stream_read_queue_chunks_ = 4;
+    bool hixl_read_enabled_ = false;
+    HixlTransportConfig hixl_transport_config_;
+    uint32_t hixl_receive_chunk_size_mb_ = 16;
+    uint32_t hixl_receive_chunk_count_ = 16;
+    uint32_t hixl_min_read_size_bytes_ = 1024 * 1024;
+    uint32_t hixl_transfer_timeout_ms_ = 5000;
+    bool hixl_fallback_to_brpc_ = true;
+    std::mutex hixl_init_mutex_;
+    std::unique_ptr<HixlTransport> hixl_transport_;
+    std::unique_ptr<HixlBufferPool> hixl_receive_pool_;
 };
 
 } // namespace falconkv

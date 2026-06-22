@@ -15,6 +15,12 @@ FalconKVClientImpl::FalconKVClientImpl(const Config& config)
     if (!config_.config_file.empty()) {
         cfg = ConfigLoader::LoadFromFile(config_.config_file);
     }
+    if (!config_.hixl_engine_addr.empty()) {
+        cfg.client.hixl_engine_addr = config_.hixl_engine_addr;
+    }
+    if (config_.hixl_device_id >= 0) {
+        cfg.client.hixl_device_id = config_.hixl_device_id;
+    }
 
     // Read node_id from config (client section takes precedence)
     node_id_ = cfg.client.node_id;
@@ -84,6 +90,21 @@ FalconKVClientImpl::FalconKVClientImpl(const Config& config)
         cfg.transfer.remote_read_chunk_size_mb * 1024U * 1024U,
         cfg.transfer.remote_read_prefetch_chunks,
         cfg.transfer.remote_read_queue_chunks);
+    HixlTransportConfig hixl_transport_cfg;
+    hixl_transport_cfg.local_engine = cfg.client.hixl_engine_addr;
+    hixl_transport_cfg.protocol_desc = cfg.transfer.hixl_protocol_desc;
+    hixl_transport_cfg.local_comm_res = cfg.transfer.hixl_local_comm_res;
+    hixl_transport_cfg.mem_type = cfg.transfer.hixl_mem_type;
+    hixl_transport_cfg.device_id = cfg.client.hixl_device_id;
+    hixl_transport_cfg.connect_timeout_ms = cfg.transfer.hixl_connect_timeout_ms;
+    store_rpc_mgr_.SetHixlReadConfig(
+        cfg.transfer.remote_read_transport == "hixl",
+        hixl_transport_cfg,
+        cfg.transfer.hixl_receive_chunk_size_mb,
+        cfg.transfer.hixl_receive_chunk_count,
+        cfg.transfer.hixl_min_read_size_bytes,
+        cfg.transfer.hixl_transfer_timeout_ms,
+        cfg.transfer.hixl_fallback_to_brpc);
 }
 
 FalconKVClientImpl::~FalconKVClientImpl() {
@@ -179,6 +200,7 @@ int FalconKVClientImpl::BatchExist(const std::vector<std::string>& keys,
                     store_addr_map_[records[i].store_id] = records[i].store_addr;
                     desc.store_addr = records[i].store_addr;
                 }
+                desc.hixl_engine_addr = records[i].hixl_engine_addr;
                 hit_descs.push_back(desc);
                 key_desc_cache_.Insert(records[i].key, desc);
             }
@@ -467,7 +489,8 @@ std::vector<int32_t> FalconKVClientImpl::BatchGet(
             uint64_t start_ts = GetCurrentTimeNs();
             std::vector<int32_t> rpc_results;
             Status batch_status = rpc->BatchRead(offsets, seg_sizes, seg_bufs, rpc_results,
-                                                  self_store_addr_);
+                                                  self_store_addr_,
+                                                  key_descs[indices[0]].hixl_engine_addr);
             uint64_t done_ts = GetCurrentTimeNs();
 
             if (!batch_status.ok()) {
@@ -551,6 +574,7 @@ std::vector<int32_t> FalconKVClientImpl::BatchGetSync(
                     store_addr_map_[records[i].store_id] = records[i].store_addr;
                     desc.store_addr = records[i].store_addr;
                 }
+                desc.hixl_engine_addr = records[i].hixl_engine_addr;
                 hit_map.emplace(records[i].key, desc);
                 key_desc_cache_.Insert(records[i].key, desc);
             }

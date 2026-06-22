@@ -47,6 +47,17 @@ struct StoreConfig {
     bool direct_io_enabled = true;
     uint32_t io_uring_queue_depth = 128;
     uint32_t slot_size_bytes = 0;  // 0 = auto-detect from first write, >0 = explicit slot size
+    std::string remote_read_transport = "brpc";
+    std::string hixl_engine_host;
+    uint32_t hixl_base_port = 16000;
+    std::string hixl_engine_addr;
+    std::string hixl_protocol_desc;
+    std::string hixl_local_comm_res;
+    std::string hixl_mem_type = "host";
+    int hixl_device_id = -1;
+    uint32_t hixl_staging_chunk_size_mb = 16;
+    uint32_t hixl_staging_chunk_count = 16;
+    uint32_t hixl_connect_timeout_ms = 3000;
 };
 
 struct SchedulerConfig {
@@ -70,10 +81,15 @@ struct ClientConfig {
     int max_consecutive_failures = 3;
     int reconnect_interval_sec = 2;
     uint32_t node_id = 0;
+    std::string hixl_engine_host;
+    uint32_t hixl_base_port = 17000;
+    std::string hixl_engine_addr;
+    int hixl_device_id = -1;
 };
 
 struct TransferConfig {
     std::string protocol = "brpc";
+    std::string remote_read_transport = "brpc";  // "brpc" | "hixl"
     std::string meta_addr = "localhost:8900";
     int meta_pool_size = 4;
     int store_pool_size = 4;
@@ -85,6 +101,17 @@ struct TransferConfig {
     uint32_t remote_read_chunk_size_mb = 16;
     uint32_t remote_read_prefetch_chunks = 4;
     uint32_t remote_read_queue_chunks = 4;
+    std::string hixl_protocol_desc;
+    std::string hixl_local_comm_res;
+    std::string hixl_mem_type = "host";
+    uint32_t hixl_staging_chunk_size_mb = 16;
+    uint32_t hixl_staging_chunk_count = 16;
+    uint32_t hixl_receive_chunk_size_mb = 16;
+    uint32_t hixl_receive_chunk_count = 16;
+    uint32_t hixl_transfer_timeout_ms = 5000;
+    uint32_t hixl_connect_timeout_ms = 3000;
+    uint32_t hixl_min_read_size_bytes = 1024 * 1024;
+    bool hixl_fallback_to_brpc = true;
 };
 
 struct FalconKVConfig {

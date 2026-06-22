@@ -34,10 +34,34 @@ FalconKVBridge::FalconKVBridge(const Config& config) {
         uint32_t old_port = cfg.store.listen_port;
         cfg.store.store_id = cfg.store.node_id * 10 + config.worker_id;
         cfg.store.listen_port = cfg.store.listen_port + config.worker_id;
+
+        std::string store_hixl_host = cfg.store.hixl_engine_host.empty()
+            ? cfg.store.store_rpc_host
+            : cfg.store.hixl_engine_host;
+        std::string client_hixl_host = cfg.client.hixl_engine_host.empty()
+            ? cfg.store.store_rpc_host
+            : cfg.client.hixl_engine_host;
+        if (cfg.store.hixl_engine_addr.empty()) {
+            cfg.store.hixl_engine_addr = store_hixl_host + ":" +
+                std::to_string(cfg.store.hixl_base_port + config.worker_id);
+        }
+        if (cfg.client.hixl_engine_addr.empty()) {
+            cfg.client.hixl_engine_addr = client_hixl_host + ":" +
+                std::to_string(cfg.client.hixl_base_port + config.worker_id);
+        }
+        if (cfg.store.hixl_device_id < 0) {
+            cfg.store.hixl_device_id = config.worker_id;
+        }
+        if (cfg.client.hixl_device_id < 0) {
+            cfg.client.hixl_device_id = config.worker_id;
+        }
+
         LOG(INFO) << "[FalconKVBridge] LMCache worker_id=" << config.worker_id
                   << ", node_id=" << cfg.store.node_id
                   << ", computed store_id=" << cfg.store.store_id
                   << ", listen_port=" << cfg.store.listen_port
+                  << ", store_hixl_engine=" << cfg.store.hixl_engine_addr
+                  << ", client_hixl_engine=" << cfg.client.hixl_engine_addr
                   << " (overrides store_id=" << old_store_id
                   << ", port=" << old_port << ")";
     }
@@ -69,6 +93,8 @@ FalconKVBridge::FalconKVBridge(const Config& config) {
     impl_config.config_file = config.config_file;
     impl_config.cache_capacity = config.cache_capacity;
     impl_config.store_rpc_addr = store_->store_rpc_addr();
+    impl_config.hixl_engine_addr = cfg.client.hixl_engine_addr;
+    impl_config.hixl_device_id = cfg.client.hixl_device_id;
     impl_ = std::make_unique<FalconKVClientImpl>(impl_config);
 
     // 将 Store 绑定到 Client

@@ -91,6 +91,10 @@ void ApplyEnvOverrides(FalconKVConfig& config) {
     config.store.direct_io_enabled = GetEnvOrDefault("FALCONKV_DIRECT_IO_ENABLED", config.store.direct_io_enabled ? "1" : "0") == "1";
     config.store.io_uring_queue_depth = GetEnvOrDefaultUInt("FALCONKV_IO_URING_QUEUE_DEPTH", config.store.io_uring_queue_depth);
     config.store.slot_size_bytes = GetEnvOrDefaultUInt("FALCONKV_SLOT_SIZE_BYTES", config.store.slot_size_bytes);
+    config.store.hixl_engine_host = GetEnvOrDefault("FALCONKV_STORE_HIXL_ENGINE_HOST", config.store.hixl_engine_host);
+    config.store.hixl_base_port = GetEnvOrDefaultUInt("FALCONKV_STORE_HIXL_BASE_PORT", config.store.hixl_base_port);
+    config.store.hixl_engine_addr = GetEnvOrDefault("FALCONKV_STORE_HIXL_ENGINE_ADDR", config.store.hixl_engine_addr);
+    config.store.hixl_device_id = GetEnvOrDefaultInt("FALCONKV_STORE_HIXL_DEVICE_ID", config.store.hixl_device_id);
 
     // Scheduler config overrides
     config.scheduler.uds_path = GetEnvOrDefault("FALCONKV_SCHED_UDS_PATH", config.scheduler.uds_path);
@@ -104,9 +108,14 @@ void ApplyEnvOverrides(FalconKVConfig& config) {
     config.client.async_batch_size = GetEnvOrDefaultInt("FALCONKV_ASYNC_BATCH_SIZE", config.client.async_batch_size);
     config.client.scheduler_uds_path = GetEnvOrDefault("FALCONKV_CLIENT_SCHEDULER_UDS_PATH", config.client.scheduler_uds_path);
     config.client.node_id = GetEnvOrDefaultUInt("FALCONKV_CLIENT_NODE_ID", config.client.node_id);
+    config.client.hixl_engine_host = GetEnvOrDefault("FALCONKV_CLIENT_HIXL_ENGINE_HOST", config.client.hixl_engine_host);
+    config.client.hixl_base_port = GetEnvOrDefaultUInt("FALCONKV_CLIENT_HIXL_BASE_PORT", config.client.hixl_base_port);
+    config.client.hixl_engine_addr = GetEnvOrDefault("FALCONKV_CLIENT_HIXL_ENGINE_ADDR", config.client.hixl_engine_addr);
+    config.client.hixl_device_id = GetEnvOrDefaultInt("FALCONKV_CLIENT_HIXL_DEVICE_ID", config.client.hixl_device_id);
 
     // Transfer config overrides
     config.transfer.protocol = GetEnvOrDefault("FALCONKV_TRANSFER_PROTOCOL", config.transfer.protocol);
+    config.transfer.remote_read_transport = GetEnvOrDefault("FALCONKV_REMOTE_READ_TRANSPORT", config.transfer.remote_read_transport);
     config.transfer.meta_addr = GetEnvOrDefault("FALCONKV_TRANSFER_META_ADDR", config.transfer.meta_addr);
     config.transfer.meta_pool_size = GetEnvOrDefaultInt("FALCONKV_META_POOL_SIZE", config.transfer.meta_pool_size);
     config.transfer.store_pool_size = GetEnvOrDefaultInt("FALCONKV_STORE_POOL_SIZE", config.transfer.store_pool_size);
@@ -118,6 +127,24 @@ void ApplyEnvOverrides(FalconKVConfig& config) {
     config.transfer.remote_read_chunk_size_mb = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_CHUNK_SIZE_MB", config.transfer.remote_read_chunk_size_mb);
     config.transfer.remote_read_prefetch_chunks = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_PREFETCH_CHUNKS", config.transfer.remote_read_prefetch_chunks);
     config.transfer.remote_read_queue_chunks = GetEnvOrDefaultUInt("FALCONKV_REMOTE_READ_QUEUE_CHUNKS", config.transfer.remote_read_queue_chunks);
+    config.transfer.hixl_protocol_desc = GetEnvOrDefault("FALCONKV_HIXL_PROTOCOL_DESC", config.transfer.hixl_protocol_desc);
+    config.transfer.hixl_local_comm_res = GetEnvOrDefault("FALCONKV_HIXL_LOCAL_COMM_RES", config.transfer.hixl_local_comm_res);
+    config.transfer.hixl_mem_type = GetEnvOrDefault("FALCONKV_HIXL_MEM_TYPE", config.transfer.hixl_mem_type);
+    config.transfer.hixl_staging_chunk_size_mb = GetEnvOrDefaultUInt("FALCONKV_HIXL_STAGING_CHUNK_SIZE_MB", config.transfer.hixl_staging_chunk_size_mb);
+    config.transfer.hixl_staging_chunk_count = GetEnvOrDefaultUInt("FALCONKV_HIXL_STAGING_CHUNK_COUNT", config.transfer.hixl_staging_chunk_count);
+    config.transfer.hixl_receive_chunk_size_mb = GetEnvOrDefaultUInt("FALCONKV_HIXL_RECEIVE_CHUNK_SIZE_MB", config.transfer.hixl_receive_chunk_size_mb);
+    config.transfer.hixl_receive_chunk_count = GetEnvOrDefaultUInt("FALCONKV_HIXL_RECEIVE_CHUNK_COUNT", config.transfer.hixl_receive_chunk_count);
+    config.transfer.hixl_transfer_timeout_ms = GetEnvOrDefaultUInt("FALCONKV_HIXL_TRANSFER_TIMEOUT_MS", config.transfer.hixl_transfer_timeout_ms);
+    config.transfer.hixl_connect_timeout_ms = GetEnvOrDefaultUInt("FALCONKV_HIXL_CONNECT_TIMEOUT_MS", config.transfer.hixl_connect_timeout_ms);
+    config.transfer.hixl_min_read_size_bytes = GetEnvOrDefaultUInt("FALCONKV_HIXL_MIN_READ_SIZE_BYTES", config.transfer.hixl_min_read_size_bytes);
+    config.transfer.hixl_fallback_to_brpc = GetEnvOrDefault("FALCONKV_HIXL_FALLBACK_TO_BRPC", config.transfer.hixl_fallback_to_brpc ? "1" : "0") == "1";
+    config.store.remote_read_transport = config.transfer.remote_read_transport;
+    config.store.hixl_protocol_desc = config.transfer.hixl_protocol_desc;
+    config.store.hixl_local_comm_res = config.transfer.hixl_local_comm_res;
+    config.store.hixl_mem_type = config.transfer.hixl_mem_type;
+    config.store.hixl_staging_chunk_size_mb = config.transfer.hixl_staging_chunk_size_mb;
+    config.store.hixl_staging_chunk_count = config.transfer.hixl_staging_chunk_count;
+    config.store.hixl_connect_timeout_ms = config.transfer.hixl_connect_timeout_ms;
 }
 
 void ParseCommonConfig(const Json::Value& root, CommonConfig& cfg) {
@@ -183,6 +210,10 @@ void ParseStoreConfig(const Json::Value& root, StoreConfig& cfg) {
     if (s.isMember("direct_io_enabled"))      cfg.direct_io_enabled = s["direct_io_enabled"].asBool();
     if (s.isMember("io_uring_queue_depth"))   cfg.io_uring_queue_depth = s["io_uring_queue_depth"].asUInt();
     if (s.isMember("slot_size_bytes"))        cfg.slot_size_bytes = s["slot_size_bytes"].asUInt();
+    if (s.isMember("hixl_engine_host"))       cfg.hixl_engine_host = s["hixl_engine_host"].asString();
+    if (s.isMember("hixl_base_port"))         cfg.hixl_base_port = s["hixl_base_port"].asUInt();
+    if (s.isMember("hixl_engine_addr"))       cfg.hixl_engine_addr = s["hixl_engine_addr"].asString();
+    if (s.isMember("hixl_device_id"))         cfg.hixl_device_id = s["hixl_device_id"].asInt();
 }
 
 void ParseSchedulerConfig(const Json::Value& root, SchedulerConfig& cfg) {
@@ -201,12 +232,17 @@ void ParseClientConfig(const Json::Value& root, ClientConfig& cfg) {
     if (c.isMember("cache_capacity"))          cfg.cache_capacity = static_cast<size_t>(c["cache_capacity"].asUInt64());
     if (c.isMember("async_batch_size"))        cfg.async_batch_size = c["async_batch_size"].asInt();
     if (c.isMember("fire_and_forget"))         cfg.fire_and_forget = c["fire_and_forget"].asBool();
+    if (c.isMember("hixl_engine_host"))        cfg.hixl_engine_host = c["hixl_engine_host"].asString();
+    if (c.isMember("hixl_base_port"))          cfg.hixl_base_port = c["hixl_base_port"].asUInt();
+    if (c.isMember("hixl_engine_addr"))        cfg.hixl_engine_addr = c["hixl_engine_addr"].asString();
+    if (c.isMember("hixl_device_id"))          cfg.hixl_device_id = c["hixl_device_id"].asInt();
 }
 
 void ParseTransferConfig(const Json::Value& root, TransferConfig& cfg) {
     if (!root.isMember("transfer")) return;
     const auto& t = root["transfer"];
     if (t.isMember("protocol"))           cfg.protocol = t["protocol"].asString();
+    if (t.isMember("remote_read_transport")) cfg.remote_read_transport = t["remote_read_transport"].asString();
     if (t.isMember("meta_pool_size"))     cfg.meta_pool_size = t["meta_pool_size"].asInt();
     if (t.isMember("store_pool_size"))    cfg.store_pool_size = t["store_pool_size"].asInt();
     if (t.isMember("rpc_timeout_ms"))     cfg.rpc_timeout_ms = t["rpc_timeout_ms"].asInt();
@@ -217,6 +253,17 @@ void ParseTransferConfig(const Json::Value& root, TransferConfig& cfg) {
     if (t.isMember("remote_read_chunk_size_mb"))  cfg.remote_read_chunk_size_mb = t["remote_read_chunk_size_mb"].asUInt();
     if (t.isMember("remote_read_prefetch_chunks")) cfg.remote_read_prefetch_chunks = t["remote_read_prefetch_chunks"].asUInt();
     if (t.isMember("remote_read_queue_chunks"))    cfg.remote_read_queue_chunks = t["remote_read_queue_chunks"].asUInt();
+    if (t.isMember("hixl_protocol_desc"))           cfg.hixl_protocol_desc = t["hixl_protocol_desc"].asString();
+    if (t.isMember("hixl_local_comm_res"))          cfg.hixl_local_comm_res = t["hixl_local_comm_res"].asString();
+    if (t.isMember("hixl_mem_type"))                cfg.hixl_mem_type = t["hixl_mem_type"].asString();
+    if (t.isMember("hixl_staging_chunk_size_mb"))   cfg.hixl_staging_chunk_size_mb = t["hixl_staging_chunk_size_mb"].asUInt();
+    if (t.isMember("hixl_staging_chunk_count"))     cfg.hixl_staging_chunk_count = t["hixl_staging_chunk_count"].asUInt();
+    if (t.isMember("hixl_receive_chunk_size_mb"))   cfg.hixl_receive_chunk_size_mb = t["hixl_receive_chunk_size_mb"].asUInt();
+    if (t.isMember("hixl_receive_chunk_count"))     cfg.hixl_receive_chunk_count = t["hixl_receive_chunk_count"].asUInt();
+    if (t.isMember("hixl_transfer_timeout_ms"))     cfg.hixl_transfer_timeout_ms = t["hixl_transfer_timeout_ms"].asUInt();
+    if (t.isMember("hixl_connect_timeout_ms"))      cfg.hixl_connect_timeout_ms = t["hixl_connect_timeout_ms"].asUInt();
+    if (t.isMember("hixl_min_read_size_bytes"))     cfg.hixl_min_read_size_bytes = t["hixl_min_read_size_bytes"].asUInt();
+    if (t.isMember("hixl_fallback_to_brpc"))        cfg.hixl_fallback_to_brpc = t["hixl_fallback_to_brpc"].asBool();
 }
 
 bool ParseJsonConfig(const std::string& json_str, FalconKVConfig& config) {
@@ -244,6 +291,13 @@ bool ParseJsonConfig(const std::string& json_str, FalconKVConfig& config) {
     ParseSchedulerConfig(root, config.scheduler);
     ParseClientConfig(root, config.client);
     ParseTransferConfig(root, config.transfer);
+    config.store.remote_read_transport = config.transfer.remote_read_transport;
+    config.store.hixl_protocol_desc = config.transfer.hixl_protocol_desc;
+    config.store.hixl_local_comm_res = config.transfer.hixl_local_comm_res;
+    config.store.hixl_mem_type = config.transfer.hixl_mem_type;
+    config.store.hixl_staging_chunk_size_mb = config.transfer.hixl_staging_chunk_size_mb;
+    config.store.hixl_staging_chunk_count = config.transfer.hixl_staging_chunk_count;
+    config.store.hixl_connect_timeout_ms = config.transfer.hixl_connect_timeout_ms;
     return true;
 }
 

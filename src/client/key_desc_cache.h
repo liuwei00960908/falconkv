@@ -17,6 +17,7 @@ struct KeyDescriptor {
     uint32_t size = 0;
     uint64_t access_time_ms = 0;
     std::string store_addr;
+    std::string hixl_engine_addr;
     AccessType access_type = AccessType::ACCESS_REMOTE_RPC;
 
     KeyDescriptor() = default;

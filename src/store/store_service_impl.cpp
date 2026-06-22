@@ -562,6 +562,73 @@ void StoreServiceImpl::BatchGetByKey(::google::protobuf::RpcController*,
 }
 
 // -----------------------------------------------------------------
+// PrepareHixlBatchRead (control-plane stub; data plane comes in HiXL phase)
+// -----------------------------------------------------------------
+void StoreServiceImpl::PrepareHixlBatchRead(
+    ::google::protobuf::RpcController*,
+    const PrepareHixlBatchReadRequest* request,
+    PrepareHixlBatchReadResponse* response,
+    ::google::protobuf::Closure* done) {
+    brpc::ClosureGuard done_guard(done);
+
+    std::vector<HixlReadRequest> requests;
+    requests.reserve(request->segments_size());
+    for (int i = 0; i < request->segments_size(); ++i) {
+        const auto& seg = request->segments(i);
+        requests.push_back({seg.offset(), seg.size()});
+    }
+
+    HixlPrepareResult result;
+    uint64_t request_ts_ns = GetCurrentTimeNs();
+    Status s = store_->PrepareHixlBatchRead(requests, &result);
+    uint64_t done_ts_ns = GetCurrentTimeNs();
+    if (!s.ok()) {
+        response->set_status(static_cast<int>(s.code()));
+        response->set_error_msg(s.msg());
+        return;
+    }
+
+    uint64_t total_io_size = 0;
+    for (const auto& req : requests) {
+        total_io_size += req.size;
+    }
+    if (store_->scheduler_proxy()) {
+        store_->scheduler_proxy()->StoreReportIOAsync(
+            store_->store_id(),
+            3,  // NET_RX_READ
+            0,
+            total_io_size,
+            request_ts_ns,
+            done_ts_ns,
+            request->source_node_addr());
+    }
+
+    response->set_status(0);
+    response->set_token(result.token);
+    response->set_remote_engine(result.remote_engine);
+    for (const auto& segment : result.segments) {
+        auto* out = response->add_segments();
+        out->set_segment_index(segment.segment_index);
+        out->set_remote_addr(segment.remote_addr);
+        out->set_size(segment.size);
+        out->set_status(segment.status);
+    }
+}
+
+// -----------------------------------------------------------------
+// ReleaseHixlReadToken (control-plane stub)
+// -----------------------------------------------------------------
+void StoreServiceImpl::ReleaseHixlReadToken(
+    ::google::protobuf::RpcController*,
+    const ReleaseHixlReadTokenRequest* request,
+    ReleaseHixlReadTokenResponse* response,
+    ::google::protobuf::Closure* done) {
+    brpc::ClosureGuard done_guard(done);
+    Status s = store_->ReleaseHixlReadToken(request->token());
+    response->set_status(s.ok() ? 0 : static_cast<int>(s.code()));
+}
+
+// -----------------------------------------------------------------
 // Ping
 // -----------------------------------------------------------------
 void StoreServiceImpl::Ping(::google::protobuf::RpcController*,

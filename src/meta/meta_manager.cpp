@@ -40,6 +40,12 @@ std::string MetaManager::GetStoreAddr(uint32_t store_id) const {
     return (it != stores_.end()) ? it->second.store_addr : "";
 }
 
+std::string MetaManager::GetStoreHixlEngineAddr(uint32_t store_id) const {
+    std::shared_lock<std::shared_mutex> lock(stores_rwlock_);
+    auto it = stores_.find(store_id);
+    return (it != stores_.end()) ? it->second.hixl_engine_addr : "";
+}
+
 // ---------- public ----------
 
 MetaManager::MetaManager(size_t shard_count)
@@ -89,6 +95,7 @@ std::vector<KeyRecord> MetaManager::BatchExist(
             results[i].node_id = GetStoreNodeId(results[i].store_id);
             results[i].data_file = GetStoreDataFile(results[i].store_id);
             results[i].store_addr = GetStoreAddr(results[i].store_id);
+            results[i].hixl_engine_addr = GetStoreHixlEngineAddr(results[i].store_id);
         }
     }
 
@@ -127,6 +134,7 @@ std::vector<KeyRecord> MetaManager::BatchLookup(
             results[i].node_id = GetStoreNodeId(results[i].store_id);
             results[i].data_file = GetStoreDataFile(results[i].store_id);
             results[i].store_addr = GetStoreAddr(results[i].store_id);
+            results[i].hixl_engine_addr = GetStoreHixlEngineAddr(results[i].store_id);
         }
     }
 

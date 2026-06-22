@@ -32,7 +32,11 @@
         "io_uring_enabled": true,
         "direct_io_enabled": true,
         "io_uring_queue_depth": 128,
-        "slot_size_bytes": 0
+        "slot_size_bytes": 0,
+        "hixl_engine_host": "",
+        "hixl_base_port": 16000,
+        "hixl_engine_addr": "",
+        "hixl_device_id": -1
     },
     "scheduler": {
         "schedule_policy": "passthrough",
@@ -43,10 +47,15 @@
     "client": {
         "cache_capacity": 100000,
         "async_batch_size": 16,
-        "fire_and_forget": true
+        "fire_and_forget": true,
+        "hixl_engine_host": "",
+        "hixl_base_port": 17000,
+        "hixl_engine_addr": "",
+        "hixl_device_id": -1
     },
     "transfer": {
         "protocol": "brpc",
+        "remote_read_transport": "brpc",
         "meta_pool_size": 4,
         "store_pool_size": 4,
         "rpc_timeout_ms": 5000,
@@ -56,6 +65,17 @@
         "remote_read_stream_enabled": true,
         "remote_read_chunk_size_mb": 16,
         "remote_read_prefetch_chunks": 4,
-        "remote_read_queue_chunks": 4
+        "remote_read_queue_chunks": 4,
+        "hixl_protocol_desc": "",
+        "hixl_local_comm_res": "",
+        "hixl_mem_type": "host",
+        "hixl_staging_chunk_size_mb": 16,
+        "hixl_staging_chunk_count": 16,
+        "hixl_receive_chunk_size_mb": 16,
+        "hixl_receive_chunk_count": 16,
+        "hixl_transfer_timeout_ms": 5000,
+        "hixl_connect_timeout_ms": 3000,
+        "hixl_min_read_size_bytes": 1048576,
+        "hixl_fallback_to_brpc": true
     }
 }

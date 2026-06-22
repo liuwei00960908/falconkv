@@ -10,6 +10,8 @@ service FalconKVStoreService {
     rpc BatchReadStream(BatchReadStreamRequest) returns (BatchReadStreamResponse);
     rpc GetByKey(GetByKeyRequest) returns (GetByKeyResponse);
     rpc BatchGetByKey(BatchGetByKeyRequest) returns (BatchGetByKeyResponse);
+    rpc PrepareHixlBatchRead(PrepareHixlBatchReadRequest) returns (PrepareHixlBatchReadResponse);
+    rpc ReleaseHixlReadToken(ReleaseHixlReadTokenRequest) returns (ReleaseHixlReadTokenResponse);
     rpc Ping(PingRequest) returns (PongResponse);
 }
 
@@ -53,6 +55,36 @@ message BatchReadStreamRequest {
 message BatchReadStreamResponse {
     optional int32 status = 1;
     optional uint32 segment_count = 2;
+}
+
+// --- HiXL control-plane RPCs ---
+
+message PrepareHixlBatchReadRequest {
+    repeated BatchReadSegment segments = 1;
+    optional string source_node_addr = 2;
+}
+
+message HixlReadSegmentDesc {
+    optional uint32 segment_index = 1;
+    optional uint64 remote_addr = 2;
+    optional uint32 size = 3;
+    optional int32 status = 4;
+}
+
+message PrepareHixlBatchReadResponse {
+    optional int32 status = 1;
+    optional string token = 2;
+    optional string remote_engine = 3;
+    repeated HixlReadSegmentDesc segments = 4;
+    optional string error_msg = 5;
+}
+
+message ReleaseHixlReadTokenRequest {
+    optional string token = 1;
+}
+
+message ReleaseHixlReadTokenResponse {
+    optional int32 status = 1;
 }
 
 // --- Key-based read RPCs for remote clients ---

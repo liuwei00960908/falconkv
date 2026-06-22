@@ -43,13 +43,15 @@ public:
 
     /// Register this store with Meta.
     Status RegisterStore(uint32_t store_id, uint32_t node_id,
-                         const std::string& data_file,
-                         uint64_t capacity_bytes);
+                          const std::string& data_file,
+                          uint64_t capacity_bytes,
+                          const std::string& hixl_engine_addr = "");
 
     /// Store registration info for reconnect + resync.
     void SetStoreInfo(uint32_t store_id, uint32_t node_id,
-                      const std::string& data_file,
-                      uint64_t capacity_bytes);
+                       const std::string& data_file,
+                       uint64_t capacity_bytes,
+                       const std::string& hixl_engine_addr = "");
 
     /// Set pointer to local meta index for full resync (not owned).
     void SetMetaIndex(StoreMetaIndex* meta_index);
@@ -93,6 +95,7 @@ private:
     uint32_t store_id_ = 0;
     uint32_t node_id_ = 0;
     std::string data_file_;
+    std::string hixl_engine_addr_;
     uint64_t capacity_bytes_ = 0;
 
     // Store RPC address for RegisterStore

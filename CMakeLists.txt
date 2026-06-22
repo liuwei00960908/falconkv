@@ -14,6 +14,7 @@ endif()
 option(FALCONKV_BUILD_TESTS "Build tests" ON)
 option(FALCONKV_BUILD_PYTHON "Build Python bindings" OFF)
 option(FALCONKV_DEBUG "Debug build" OFF)
+option(FALCONKV_WITH_HIXL "Build with Huawei HiXL remote-read support" OFF)
 
 # Build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -105,6 +106,31 @@ if(LIBURING_INCLUDE_DIR AND LIBURING_LIBRARY)
 else()
     set(FALCONKV_HAS_IOURING FALSE)
     message(STATUS "liburing not found, io_uring disabled")
+endif()
+
+# Find Huawei HiXL (optional, disabled by default so non-Ascend hosts build normally)
+if(FALCONKV_WITH_HIXL)
+    find_path(HIXL_INCLUDE_DIR NAMES hixl/hixl.h)
+    find_library(HIXL_LIBRARY NAMES cann_hixl)
+    find_library(ACL_RT_LIBRARY NAMES acl_rt)
+    find_library(ASCEND_HAL_LIBRARY NAMES ascend_hal)
+    find_library(METADEF_LIBRARY NAMES metadef)
+    if(HIXL_INCLUDE_DIR AND HIXL_LIBRARY AND ACL_RT_LIBRARY AND ASCEND_HAL_LIBRARY AND METADEF_LIBRARY)
+        set(FALCONKV_HAS_HIXL TRUE)
+        message(STATUS "Found HiXL: ${HIXL_LIBRARY}")
+        add_library(falconkv_hixl_deps INTERFACE)
+        target_include_directories(falconkv_hixl_deps INTERFACE ${HIXL_INCLUDE_DIR})
+        target_link_libraries(falconkv_hixl_deps INTERFACE
+            ${HIXL_LIBRARY}
+            ${ACL_RT_LIBRARY}
+            ${ASCEND_HAL_LIBRARY}
+            ${METADEF_LIBRARY}
+        )
+    else()
+        message(FATAL_ERROR "FALCONKV_WITH_HIXL=ON requires hixl/hixl.h, libcann_hixl, acl_rt, ascend_hal, and metadef")
+    endif()
+else()
+    set(FALCONKV_HAS_HIXL FALSE)
 endif()
 
 # Find GTest

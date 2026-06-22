@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <future>
 #include <chrono>
+#include <sstream>
 
 namespace falconkv {
 
@@ -68,6 +69,15 @@ FalconKVStore::Config FalconKVStore::Config::FromStoreConfig(const StoreConfig& 
     cfg.direct_io_enabled = sc.direct_io_enabled;
     cfg.io_uring_queue_depth = sc.io_uring_queue_depth;
     cfg.slot_size_bytes = sc.slot_size_bytes;
+    cfg.remote_read_transport = sc.remote_read_transport;
+    cfg.hixl_engine_addr = sc.hixl_engine_addr;
+    cfg.hixl_protocol_desc = sc.hixl_protocol_desc;
+    cfg.hixl_local_comm_res = sc.hixl_local_comm_res;
+    cfg.hixl_mem_type = sc.hixl_mem_type;
+    cfg.hixl_device_id = sc.hixl_device_id;
+    cfg.hixl_staging_chunk_size_mb = sc.hixl_staging_chunk_size_mb;
+    cfg.hixl_staging_chunk_count = sc.hixl_staging_chunk_count;
+    cfg.hixl_connect_timeout_ms = sc.hixl_connect_timeout_ms;
     return cfg;
 }
 
@@ -137,11 +147,19 @@ Status FalconKVStore::Init(const std::string& meta_addr) {
         LOG(INFO) << "[FalconKVStore] io_uring disabled by config";
     }
 
+    if (config_.remote_read_transport == "hixl") {
+        Status hixl_status = InitHixlRemoteRead();
+        if (!hixl_status.ok()) {
+            LOG(WARNING) << "[FalconKVStore] HiXL remote read disabled: "
+                         << hixl_status.ToString();
+        }
+    }
+
     // Initialize MetaSyncClient.
     meta_sync_client_ = std::make_unique<MetaSyncClient>();
     std::string addr = meta_addr.empty() ? config_.meta_addr : meta_addr;
     meta_sync_client_->SetStoreInfo(store_id_, config_.node_id, data_file_,
-                                     config_.capacity_bytes);
+                                     config_.capacity_bytes, hixl_engine_addr_);
     meta_sync_client_->SetMetaIndex(meta_index_.get());
     meta_sync_client_->SetStoreRpcAddr(config_.store_rpc_host, config_.listen_port);
     meta_sync_client_->Connect(addr);  // Connect triggers FullResync on success.
@@ -176,6 +194,134 @@ Status FalconKVStore::Init(const std::string& meta_addr) {
     pending_evict_queue_->Start();
     evict_manager_->Start();
 
+    return Status::OK();
+}
+
+Status FalconKVStore::InitHixlRemoteRead() {
+    hixl_read_ready_ = false;
+    hixl_engine_addr_.clear();
+    hixl_transport_ = std::make_unique<HixlTransport>();
+
+    HixlTransportConfig hixl_cfg;
+    hixl_cfg.local_engine = config_.hixl_engine_addr;
+    hixl_cfg.protocol_desc = config_.hixl_protocol_desc;
+    hixl_cfg.local_comm_res = config_.hixl_local_comm_res;
+    hixl_cfg.mem_type = config_.hixl_mem_type;
+    hixl_cfg.device_id = config_.hixl_device_id;
+    hixl_cfg.connect_timeout_ms = config_.hixl_connect_timeout_ms;
+
+    Status s = hixl_transport_->Init(hixl_cfg);
+    if (!s.ok()) {
+        return s;
+    }
+
+    hixl_staging_pool_ = std::make_unique<HixlBufferPool>();
+    size_t chunk_size = static_cast<size_t>(config_.hixl_staging_chunk_size_mb) *
+                        1024ULL * 1024ULL;
+    s = hixl_staging_pool_->Init(chunk_size,
+                                 config_.hixl_staging_chunk_count,
+                                 config_.page_size,
+                                 hixl_transport_.get());
+    if (!s.ok()) {
+        hixl_staging_pool_.reset();
+        hixl_transport_->Close();
+        return s;
+    }
+
+    hixl_engine_addr_ = config_.hixl_engine_addr;
+    hixl_read_ready_ = true;
+    LOG(INFO) << "[FalconKVStore] HiXL remote read enabled, engine="
+              << hixl_engine_addr_ << ", staging_chunk_size=" << chunk_size
+              << ", staging_chunk_count=" << config_.hixl_staging_chunk_count;
+    return Status::OK();
+}
+
+Status FalconKVStore::PrepareHixlBatchRead(
+    const std::vector<HixlReadRequest>& requests,
+    HixlPrepareResult* result) {
+    if (!result) {
+        return Status::InvalidArg("null HiXL prepare result");
+    }
+    result->segments.clear();
+    result->token.clear();
+    result->remote_engine = hixl_engine_addr_;
+    if (!hixl_read_ready_ || !hixl_staging_pool_) {
+        return Status::NotSupported("HiXL remote read is not enabled");
+    }
+    if (requests.empty()) {
+        return Status::OK();
+    }
+
+    std::vector<HixlBufferPool::Lease> leases;
+    std::vector<ReadItem> read_items;
+    leases.reserve(requests.size());
+    read_items.reserve(requests.size());
+
+    for (const auto& req : requests) {
+        HixlBufferPool::Lease lease;
+        Status s = hixl_staging_pool_->Acquire(req.size, &lease);
+        if (!s.ok()) {
+            for (const auto& held : leases) {
+                hixl_staging_pool_->Release(held);
+            }
+            return s;
+        }
+        read_items.push_back({req.offset, lease.addr, req.size});
+        leases.push_back(lease);
+    }
+
+    Status s = BatchRead(read_items);
+    if (!s.ok()) {
+        for (const auto& lease : leases) {
+            hixl_staging_pool_->Release(lease);
+        }
+        return s;
+    }
+
+    static std::atomic<uint64_t> token_seq{1};
+    uint64_t seq = token_seq.fetch_add(1, std::memory_order_relaxed);
+    std::ostringstream oss;
+    oss << store_id_ << "-" << GetCurrentTimeNs() << "-" << seq;
+    result->token = oss.str();
+    result->segments.reserve(leases.size());
+    for (size_t i = 0; i < leases.size(); ++i) {
+        result->segments.push_back({static_cast<uint32_t>(i),
+                                    reinterpret_cast<uintptr_t>(leases[i].addr),
+                                    requests[i].size,
+                                    0});
+    }
+
+    HixlReadLease read_lease;
+    read_lease.leases = std::move(leases);
+    read_lease.create_time_ms = GetCurrentTimeMs();
+    {
+        std::lock_guard<std::mutex> lock(hixl_lease_mutex_);
+        hixl_read_leases_[result->token] = std::move(read_lease);
+    }
+    return Status::OK();
+}
+
+Status FalconKVStore::ReleaseHixlReadToken(const std::string& token) {
+    if (token.empty()) {
+        return Status::InvalidArg("empty HiXL read token");
+    }
+    if (!hixl_staging_pool_) {
+        return Status::OK();
+    }
+
+    HixlReadLease lease;
+    {
+        std::lock_guard<std::mutex> lock(hixl_lease_mutex_);
+        auto it = hixl_read_leases_.find(token);
+        if (it == hixl_read_leases_.end()) {
+            return Status::OK();
+        }
+        lease = std::move(it->second);
+        hixl_read_leases_.erase(it);
+    }
+    for (const auto& chunk : lease.leases) {
+        hixl_staging_pool_->Release(chunk);
+    }
     return Status::OK();
 }
 
@@ -743,6 +889,25 @@ void FalconKVStore::Close() {
     // Stop background threads before releasing resources they depend on.
     evict_manager_.reset();
     pending_evict_queue_.reset();
+
+    {
+        std::lock_guard<std::mutex> lock(hixl_lease_mutex_);
+        if (hixl_staging_pool_) {
+            for (const auto& kv : hixl_read_leases_) {
+                for (const auto& lease : kv.second.leases) {
+                    hixl_staging_pool_->Release(lease);
+                }
+            }
+        }
+        hixl_read_leases_.clear();
+    }
+    hixl_staging_pool_.reset();
+    if (hixl_transport_) {
+        hixl_transport_->Close();
+        hixl_transport_.reset();
+    }
+    hixl_read_ready_ = false;
+    hixl_engine_addr_.clear();
 
     // Close io_uring first, then stop thread pool.
     if (io_uring_engine_) {

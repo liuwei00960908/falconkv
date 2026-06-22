@@ -28,6 +28,9 @@ static void KeyRecordToProto(const KeyRecord& rec, KeyDesc* desc) {
     if (!rec.store_addr.empty()) {
         desc->set_store_addr(rec.store_addr);
     }
+    if (!rec.hixl_engine_addr.empty()) {
+        desc->set_hixl_engine_addr(rec.hixl_engine_addr);
+    }
 }
 
 // -----------------------------------------------------------------
@@ -98,6 +101,9 @@ void MetaServiceImpl::StoreRegister(::google::protobuf::RpcController*,
     info.store_addr = request->node_host() + ":" +
                       std::to_string(request->node_port());
     info.data_file = request->data_file();
+    if (request->has_hixl_engine_addr()) {
+        info.hixl_engine_addr = request->hixl_engine_addr();
+    }
 
     Status status = meta_manager_->RegisterStore(info);
     if (status.ok()) {

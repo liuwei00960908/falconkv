@@ -25,6 +25,7 @@ struct KeyRecord {
     uint32_t node_id = 0;
     std::string data_file;       // same-node DirectIO path
     std::string store_addr;      // remote RPC routing address
+    std::string hixl_engine_addr;
 };
 
 struct StoreInfo {
@@ -32,6 +33,7 @@ struct StoreInfo {
     uint32_t node_id = 0;
     std::string store_addr;   // remote RPC routing
     std::string data_file;    // same-node DirectIO path
+    std::string hixl_engine_addr;
 };
 
 class MetaManager {
@@ -76,6 +78,9 @@ private:
 
     /// Look up the store_addr (RPC address) for a given store_id. Returns "" if not found.
     std::string GetStoreAddr(uint32_t store_id) const;
+
+    /// Look up the HiXL engine address for a given store_id. Returns "" if not found.
+    std::string GetStoreHixlEngineAddr(uint32_t store_id) const;
 
     struct Shard {
         std::shared_mutex rwlock;

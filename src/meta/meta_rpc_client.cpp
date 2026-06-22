@@ -75,6 +75,9 @@ KeyRecord MetaRpcClient::ProtoToKeyRecord(const KeyDesc& desc) {
     if (desc.has_store_addr()) {
         rec.store_addr = desc.store_addr();
     }
+    if (desc.has_hixl_engine_addr()) {
+        rec.hixl_engine_addr = desc.hixl_engine_addr();
+    }
     return rec;
 }
 

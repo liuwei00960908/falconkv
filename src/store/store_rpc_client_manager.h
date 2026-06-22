@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "src/store/store_rpc_client.h"
+#include "src/store/hixl_transport.h"
 
 namespace falconkv {
 
@@ -37,6 +38,15 @@ public:
                              uint32_t prefetch_chunks,
                              uint32_t queue_chunks);
 
+    /// Configure optional HiXL remote reads for future connections.
+    void SetHixlReadConfig(bool enabled,
+                           const HixlTransportConfig& transport_config,
+                           uint32_t receive_chunk_size_mb,
+                           uint32_t receive_chunk_count,
+                           uint32_t min_read_size_bytes,
+                           uint32_t transfer_timeout_ms,
+                           bool fallback_to_brpc);
+
 private:
     std::mutex mutex_;
     std::unordered_map<std::string, std::unique_ptr<StoreRpcClient>> clients_;
@@ -46,6 +56,13 @@ private:
     uint32_t stream_read_chunk_size_bytes_ = 16 * 1024 * 1024;
     uint32_t stream_read_prefetch_chunks_ = 4;
     uint32_t stream_read_queue_chunks_ = 4;
+    bool hixl_read_enabled_ = false;
+    HixlTransportConfig hixl_transport_config_;
+    uint32_t hixl_receive_chunk_size_mb_ = 16;
+    uint32_t hixl_receive_chunk_count_ = 16;
+    uint32_t hixl_min_read_size_bytes_ = 1024 * 1024;
+    uint32_t hixl_transfer_timeout_ms_ = 5000;
+    bool hixl_fallback_to_brpc_ = true;
 };
 
 } // namespace falconkv

@@ -34,6 +34,8 @@ public:
         bool scheduler_enabled = true;
         std::string scheduler_uds_path = "/tmp/falconkv_scheduler.sock";
         int scheduler_rpc_timeout_us = 2000;
+        std::string hixl_engine_addr;
+        int hixl_device_id = -1;
     };
 
     explicit FalconKVClientImpl(const Config& config);

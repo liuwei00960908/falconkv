@@ -30,6 +30,7 @@ message KeyDesc {
     optional AccessTypeProto access_type = 6 [default = ACCESS_REMOTE_RPC];
     optional uint32 node_id = 7;
     optional string store_addr = 8;
+    optional string hixl_engine_addr = 9;
 }
 
 message BatchExistRequest {
@@ -58,6 +59,7 @@ message StoreRegisterRequest {
     optional string data_file = 5;
     optional uint64 capacity_bytes = 6;
     optional uint32 node_id = 8;
+    optional string hixl_engine_addr = 9;
 }
 
 message StoreRegisterResponse {

@@ -7,11 +7,14 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 #include "src/common/status.h"
 #include "src/common/aligned_allocator.h"
 #include "src/common/config.h"
 #include "src/scheduler/scheduler_proxy.h"
+#include "src/store/hixl_buffer_pool.h"
+#include "src/store/hixl_transport.h"
 
 namespace falconkv {
 
@@ -25,6 +28,24 @@ struct ReadItem {
     uint64_t offset;
     void* buffer;
     uint32_t size;
+};
+
+struct HixlReadRequest {
+    uint64_t offset = 0;
+    uint32_t size = 0;
+};
+
+struct HixlPreparedSegment {
+    uint32_t segment_index = 0;
+    uintptr_t remote_addr = 0;
+    uint32_t size = 0;
+    int32_t status = 0;
+};
+
+struct HixlPrepareResult {
+    std::string token;
+    std::string remote_engine;
+    std::vector<HixlPreparedSegment> segments;
 };
 
 struct WriteTask {
@@ -82,6 +103,15 @@ public:
         bool direct_io_enabled = true;
         uint32_t io_uring_queue_depth = 128;
         uint32_t slot_size_bytes = 0;  // 0 = auto-detect from first write
+        std::string remote_read_transport = "brpc";
+        std::string hixl_engine_addr;
+        std::string hixl_protocol_desc;
+        std::string hixl_local_comm_res;
+        std::string hixl_mem_type = "host";
+        int hixl_device_id = -1;
+        uint32_t hixl_staging_chunk_size_mb = 16;
+        uint32_t hixl_staging_chunk_count = 16;
+        uint32_t hixl_connect_timeout_ms = 3000;
 
         static Config FromStoreConfig(const StoreConfig& sc);
     };
@@ -96,6 +126,9 @@ public:
     Status Read(uint64_t offset, void* buffer, uint32_t size);
     Status BatchWrite(const std::vector<WriteItem>& items);
     Status BatchRead(const std::vector<ReadItem>& items);
+    Status PrepareHixlBatchRead(const std::vector<HixlReadRequest>& requests,
+                                HixlPrepareResult* result);
+    Status ReleaseHixlReadToken(const std::string& token);
 
     // --- Key-aware high-level API (new) ---
     StorePutResult Put(const std::string& key, const void* data, uint32_t size);
@@ -116,10 +149,12 @@ public:
     uint32_t node_id() const { return config_.node_id; }
     const std::string& data_file() const { return data_file_; }
     const std::string& store_rpc_addr() const { return store_rpc_addr_; }
+    const std::string& hixl_engine_addr() const { return hixl_engine_addr_; }
     SchedulerProxy* scheduler_proxy() const { return scheduler_proxy_.get(); }
 
 private:
     Status InitDataFile();
+    Status InitHixlRemoteRead();
 
     Config config_;
     int data_fd_ = -1;            // O_DIRECT fd (when direct_io_enabled=true)
@@ -127,6 +162,7 @@ private:
     uint32_t store_id_;
     std::string data_file_;
     std::string store_rpc_addr_;
+    std::string hixl_engine_addr_;
     std::atomic<bool> running_{false};
     std::unique_ptr<AlignedBufferPool> buffer_pool_;
     std::unique_ptr<IOThreadPool> io_pool_;
@@ -140,6 +176,16 @@ private:
     std::unique_ptr<PendingEvictQueue> pending_evict_queue_;
     std::unique_ptr<EvictManager> evict_manager_;
     std::unique_ptr<SchedulerProxy> scheduler_proxy_;
+
+    struct HixlReadLease {
+        std::vector<HixlBufferPool::Lease> leases;
+        uint64_t create_time_ms = 0;
+    };
+    std::unique_ptr<HixlTransport> hixl_transport_;
+    std::unique_ptr<HixlBufferPool> hixl_staging_pool_;
+    std::mutex hixl_lease_mutex_;
+    std::unordered_map<std::string, HixlReadLease> hixl_read_leases_;
+    bool hixl_read_ready_ = false;
 };
 
 } // namespace falconkv

@@ -73,11 +73,24 @@ public:
     Status Ping();
 
 private:
+    struct HixlChunk {
+        std::vector<size_t> indices;
+        uint64_t total_size = 0;
+    };
+
+    struct PreparedHixlChunk {
+        HixlChunk chunk;
+        std::string token;
+        std::string remote_engine;
+        std::vector<uint64_t> remote_addrs;
+        std::vector<uint32_t> sizes;
+    };
+
     Status BatchReadStream(const std::vector<uint64_t>& offsets,
-                            const std::vector<uint32_t>& sizes,
-                            const std::vector<void*>& buffers,
-                            std::vector<int32_t>& results,
-                            const std::string& source_node_addr);
+                             const std::vector<uint32_t>& sizes,
+                             const std::vector<void*>& buffers,
+                             std::vector<int32_t>& results,
+                             const std::string& source_node_addr);
 
     Status BatchReadHixl(const std::vector<uint64_t>& offsets,
                          const std::vector<uint32_t>& sizes,
@@ -85,6 +98,18 @@ private:
                          std::vector<int32_t>& results,
                          const std::string& source_node_addr,
                          const std::string& hixl_engine_addr);
+    std::vector<HixlChunk> BuildHixlChunks(
+        const std::vector<uint32_t>& sizes) const;
+    Status PrepareHixlChunk(const HixlChunk& chunk,
+                            const std::vector<uint64_t>& offsets,
+                            const std::vector<uint32_t>& sizes,
+                            const std::string& source_node_addr,
+                            const std::string& fallback_remote_engine,
+                            PreparedHixlChunk* prepared);
+    Status TransferPreparedHixlChunk(const PreparedHixlChunk& prepared,
+                                     const std::vector<void*>& buffers,
+                                     std::vector<int32_t>& results);
+    void ReleaseHixlReadTokenBestEffort(const std::string& token);
     Status EnsureHixlReceivePool();
 
     brpc::Channel channel_;

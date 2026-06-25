@@ -509,6 +509,174 @@ Status StoreRpcClient::BatchRead(const std::vector<uint64_t>& offsets,
     return Status::OK();
 }
 
+std::vector<StoreRpcClient::HixlChunk> StoreRpcClient::BuildHixlChunks(
+    const std::vector<uint32_t>& sizes) const {
+    std::vector<HixlChunk> chunks;
+    HixlChunk current;
+    const uint64_t chunk_limit = std::max<uint32_t>(1, stream_read_chunk_size_bytes_);
+
+    for (size_t i = 0; i < sizes.size(); ++i) {
+        uint64_t seg_size = sizes[i];
+        if (!current.indices.empty() &&
+            current.total_size + seg_size > chunk_limit) {
+            chunks.push_back(std::move(current));
+            current = HixlChunk();
+        }
+        current.indices.push_back(i);
+        current.total_size += seg_size;
+    }
+    if (!current.indices.empty()) {
+        chunks.push_back(std::move(current));
+    }
+    return chunks;
+}
+
+Status StoreRpcClient::PrepareHixlChunk(
+    const HixlChunk& chunk,
+    const std::vector<uint64_t>& offsets,
+    const std::vector<uint32_t>& sizes,
+    const std::string& source_node_addr,
+    const std::string& fallback_remote_engine,
+    PreparedHixlChunk* prepared) {
+    if (!prepared) {
+        return Status::InvalidArg("null prepared HiXL chunk");
+    }
+    prepared->chunk = chunk;
+    prepared->token.clear();
+    prepared->remote_engine.clear();
+    prepared->remote_addrs.assign(chunk.indices.size(), 0);
+    prepared->sizes.assign(chunk.indices.size(), 0);
+
+    PrepareHixlBatchReadRequest request;
+    for (size_t idx : chunk.indices) {
+        auto* seg = request.add_segments();
+        seg->set_offset(offsets[idx]);
+        seg->set_size(sizes[idx]);
+    }
+    if (!source_node_addr.empty()) {
+        request.set_source_node_addr(source_node_addr);
+    }
+
+    PrepareHixlBatchReadResponse response;
+    brpc::Controller cntl;
+    stub_->PrepareHixlBatchRead(&cntl, &request, &response, nullptr);
+    if (cntl.Failed()) {
+        return Status::RpcError("PrepareHixlBatchRead RPC failed: " +
+                                std::string(cntl.ErrorText()));
+    }
+    if (response.status() != 0) {
+        std::string msg = response.has_error_msg()
+            ? response.error_msg()
+            : "PrepareHixlBatchRead failed";
+        return Status(static_cast<Status::Code>(response.status()), msg);
+    }
+
+    if (response.segments_size() != static_cast<int>(chunk.indices.size())) {
+        return Status::RpcError("PrepareHixlBatchRead response segment count mismatch");
+    }
+
+    prepared->token = response.has_token() ? response.token() : "";
+    prepared->remote_engine = response.has_remote_engine() &&
+                               !response.remote_engine().empty()
+        ? response.remote_engine()
+        : fallback_remote_engine;
+    if (prepared->remote_engine.empty()) {
+        return Status::InvalidArg("HiXL remote engine is empty");
+    }
+
+    for (int i = 0; i < response.segments_size(); ++i) {
+        const auto& seg = response.segments(i);
+        if (seg.status() != 0 ||
+            seg.segment_index() >= chunk.indices.size() ||
+            seg.remote_addr() == 0) {
+            return Status::RpcError("invalid PrepareHixlBatchRead segment");
+        }
+        size_t chunk_idx = seg.segment_index();
+        size_t orig_idx = chunk.indices[chunk_idx];
+        if (seg.size() != sizes[orig_idx]) {
+            return Status::RpcError("PrepareHixlBatchRead segment size mismatch");
+        }
+        prepared->remote_addrs[chunk_idx] = seg.remote_addr();
+        prepared->sizes[chunk_idx] = seg.size();
+    }
+    return Status::OK();
+}
+
+Status StoreRpcClient::TransferPreparedHixlChunk(
+    const PreparedHixlChunk& prepared,
+    const std::vector<void*>& buffers,
+    std::vector<int32_t>& results) {
+    std::vector<HixlBufferPool::Lease> leases;
+    std::vector<HixlReadOp> ops;
+    leases.reserve(prepared.chunk.indices.size());
+    ops.reserve(prepared.chunk.indices.size());
+
+    for (size_t i = 0; i < prepared.chunk.indices.size(); ++i) {
+        if (prepared.remote_addrs[i] == 0 || prepared.sizes[i] == 0) {
+            for (const auto& lease : leases) {
+                hixl_receive_pool_->Release(lease);
+            }
+            return Status::RpcError("invalid prepared HiXL chunk segment");
+        }
+        HixlBufferPool::Lease lease;
+        Status s = hixl_receive_pool_->Acquire(prepared.sizes[i], &lease);
+        if (!s.ok()) {
+            for (const auto& held : leases) {
+                hixl_receive_pool_->Release(held);
+            }
+            return s;
+        }
+        leases.push_back(lease);
+        ops.push_back({reinterpret_cast<uintptr_t>(lease.addr),
+                       static_cast<uintptr_t>(prepared.remote_addrs[i]),
+                       prepared.sizes[i]});
+    }
+
+    Status s = hixl_transport_->Connect(prepared.remote_engine);
+    if (s.ok()) {
+        s = hixl_transport_->Read(prepared.remote_engine, ops,
+                                  hixl_transfer_timeout_ms_);
+    }
+    if (!s.ok()) {
+        for (const auto& lease : leases) {
+            hixl_receive_pool_->Release(lease);
+        }
+        return s;
+    }
+
+    for (size_t i = 0; i < prepared.chunk.indices.size(); ++i) {
+        size_t orig_idx = prepared.chunk.indices[i];
+        std::memcpy(buffers[orig_idx], leases[i].addr, prepared.sizes[i]);
+        results[orig_idx] = static_cast<int32_t>(prepared.sizes[i]);
+    }
+
+    for (const auto& lease : leases) {
+        hixl_receive_pool_->Release(lease);
+    }
+    return Status::OK();
+}
+
+void StoreRpcClient::ReleaseHixlReadTokenBestEffort(const std::string& token) {
+    if (token.empty()) {
+        return;
+    }
+    ReleaseHixlReadTokenRequest release_request;
+    release_request.set_token(token);
+    ReleaseHixlReadTokenResponse release_response;
+    brpc::Controller release_cntl;
+    stub_->ReleaseHixlReadToken(&release_cntl, &release_request,
+                                &release_response, nullptr);
+    if (release_cntl.Failed()) {
+        LOG(WARNING) << "[StoreRpcClient] ReleaseHixlReadToken failed: "
+                     << release_cntl.ErrorText();
+        return;
+    }
+    if (release_response.status() != 0) {
+        LOG(WARNING) << "[StoreRpcClient] ReleaseHixlReadToken status="
+                     << release_response.status();
+    }
+}
+
 Status StoreRpcClient::BatchReadHixl(const std::vector<uint64_t>& offsets,
                                      const std::vector<uint32_t>& sizes,
                                      const std::vector<void*>& buffers,
@@ -522,112 +690,80 @@ Status StoreRpcClient::BatchReadHixl(const std::vector<uint64_t>& offsets,
         return pool_status;
     }
 
-    PrepareHixlBatchReadRequest request;
-    for (size_t i = 0; i < offsets.size(); ++i) {
-        auto* seg = request.add_segments();
-        seg->set_offset(offsets[i]);
-        seg->set_size(sizes[i]);
-    }
-    if (!source_node_addr.empty()) {
-        request.set_source_node_addr(source_node_addr);
+    std::vector<HixlChunk> chunks = BuildHixlChunks(sizes);
+    if (chunks.empty()) {
+        return Status::OK();
     }
 
-    PrepareHixlBatchReadResponse response;
-    brpc::Controller cntl;
-    LOG(INFO) << "[StoreRpcClient] PrepareHixlBatchRead: segments="
+    LOG(INFO) << "[StoreRpcClient] HiXL pipeline BatchRead: chunks="
+              << chunks.size() << ", chunk_size="
+              << stream_read_chunk_size_bytes_ << ", prefetch="
+              << stream_read_prefetch_chunks_ << ", segments="
               << offsets.size() << ", remote_engine=" << hixl_engine_addr;
-    stub_->PrepareHixlBatchRead(&cntl, &request, &response, nullptr);
-    if (cntl.Failed()) {
-        return Status::RpcError("PrepareHixlBatchRead RPC failed: " +
-                                std::string(cntl.ErrorText()));
-    }
-    if (response.status() != 0) {
-        std::string msg = response.has_error_msg()
-            ? response.error_msg()
-            : "PrepareHixlBatchRead failed";
-        return Status(static_cast<Status::Code>(response.status()), msg);
-    }
 
-    if (response.segments_size() != static_cast<int>(offsets.size())) {
-        return Status::RpcError("PrepareHixlBatchRead response segment count mismatch");
-    }
+    std::vector<PreparedHixlChunk> prepared(chunks.size());
+    std::vector<std::future<Status>> futures(chunks.size());
+    std::vector<bool> prepare_done(chunks.size(), false);
+    std::vector<bool> token_released(chunks.size(), false);
 
-    auto release_token = [&]() {
-        if (!response.has_token() || response.token().empty()) {
-            return;
-        }
-        ReleaseHixlReadTokenRequest release_request;
-        release_request.set_token(response.token());
-        ReleaseHixlReadTokenResponse release_response;
-        brpc::Controller release_cntl;
-        stub_->ReleaseHixlReadToken(&release_cntl, &release_request,
-                                    &release_response, nullptr);
-        if (release_cntl.Failed()) {
-            LOG(WARNING) << "[StoreRpcClient] ReleaseHixlReadToken failed: "
-                         << release_cntl.ErrorText();
+    size_t next_prepare = 0;
+    const size_t prepare_window = std::max<size_t>(1, stream_read_prefetch_chunks_);
+
+    auto submit_prepare = [&](size_t chunk_id) {
+        futures[chunk_id] = std::async(std::launch::async,
+            [this, &chunks, &offsets, &sizes, &source_node_addr,
+             &hixl_engine_addr, &prepared, chunk_id]() {
+                return PrepareHixlChunk(chunks[chunk_id], offsets, sizes,
+                                        source_node_addr, hixl_engine_addr,
+                                        &prepared[chunk_id]);
+            });
+    };
+
+    auto release_token = [&](size_t chunk_id) {
+        if (!token_released[chunk_id]) {
+            ReleaseHixlReadTokenBestEffort(prepared[chunk_id].token);
+            token_released[chunk_id] = true;
         }
     };
 
-    std::vector<HixlBufferPool::Lease> leases;
-    std::vector<HixlReadOp> ops;
-    leases.reserve(offsets.size());
-    ops.reserve(offsets.size());
-
-    for (int i = 0; i < response.segments_size(); ++i) {
-        const auto& seg = response.segments(i);
-        if (seg.status() != 0 || seg.segment_index() >= offsets.size() ||
-            seg.size() != sizes[seg.segment_index()] || seg.remote_addr() == 0) {
-            for (const auto& lease : leases) {
-                hixl_receive_pool_->Release(lease);
+    auto cleanup_prepared = [&]() {
+        for (size_t i = 0; i < next_prepare; ++i) {
+            if (!prepare_done[i] && futures[i].valid()) {
+                (void)futures[i].get();
+                prepare_done[i] = true;
             }
-            release_token();
-            return Status::RpcError("invalid PrepareHixlBatchRead segment");
+            if (!prepared[i].token.empty()) {
+                release_token(i);
+            }
         }
+    };
 
-        HixlBufferPool::Lease lease;
-        Status s = hixl_receive_pool_->Acquire(seg.size(), &lease);
+    while (next_prepare < chunks.size() && next_prepare < prepare_window) {
+        submit_prepare(next_prepare++);
+    }
+
+    for (size_t chunk_id = 0; chunk_id < chunks.size(); ++chunk_id) {
+        Status s = futures[chunk_id].get();
+        prepare_done[chunk_id] = true;
         if (!s.ok()) {
-            for (const auto& held : leases) {
-                hixl_receive_pool_->Release(held);
-            }
-            release_token();
+            cleanup_prepared();
+            results.assign(offsets.size(), 0);
             return s;
         }
-        leases.push_back(lease);
-        ops.push_back({reinterpret_cast<uintptr_t>(lease.addr),
-                       static_cast<uintptr_t>(seg.remote_addr()),
-                       seg.size()});
-    }
 
-    std::string remote_engine = response.has_remote_engine() &&
-                                !response.remote_engine().empty()
-        ? response.remote_engine()
-        : hixl_engine_addr;
-    LOG(INFO) << "[StoreRpcClient] HiXL TransferSync READ: remote_engine="
-              << remote_engine << ", ops=" << ops.size();
-    Status s = hixl_transport_->Connect(remote_engine);
-    if (s.ok()) {
-        s = hixl_transport_->Read(remote_engine, ops, hixl_transfer_timeout_ms_);
-    }
-    if (!s.ok()) {
-        for (const auto& lease : leases) {
-            hixl_receive_pool_->Release(lease);
+        if (next_prepare < chunks.size()) {
+            submit_prepare(next_prepare++);
         }
-        release_token();
-        return s;
+
+        s = TransferPreparedHixlChunk(prepared[chunk_id], buffers, results);
+        release_token(chunk_id);
+        if (!s.ok()) {
+            cleanup_prepared();
+            results.assign(offsets.size(), 0);
+            return s;
+        }
     }
 
-    for (int i = 0; i < response.segments_size(); ++i) {
-        const auto& seg = response.segments(i);
-        size_t idx = seg.segment_index();
-        std::memcpy(buffers[idx], leases[i].addr, seg.size());
-        results[idx] = static_cast<int32_t>(seg.size());
-    }
-
-    for (const auto& lease : leases) {
-        hixl_receive_pool_->Release(lease);
-    }
-    release_token();
     return Status::OK();
 }
 
